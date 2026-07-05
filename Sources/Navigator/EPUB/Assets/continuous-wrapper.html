@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      background: transparent;
+      /* Enable native scroll anchoring as a baseline */
+      overflow-anchor: auto;
+    }
+
+    body {
+      /* Vertical scroll container */
+      overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Container for all chapters */
+    #chapters {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      width: 100%;
+    }
+
+    /* Chapter container - either an iframe or a spacer */
+    .chapter {
+      width: 100%;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    /* Spacer element for unmounted chapters */
+    .chapter-spacer {
+      background: transparent;
+      /* Height is set dynamically via JS */
+    }
+
+    /* Iframe for mounted chapters */
+    .chapter-iframe {
+      display: block;
+      width: 100%;
+      border: none;
+      background: transparent;
+      /* Height is set dynamically based on content */
+      overflow: hidden;
+    }
+
+    /* Chapter separator between spine items */
+    .chapter-separator {
+      width: 100%;
+      /* Custom HTML content inserted by Swift */
+    }
+
+    /* Loading indicator for chapters */
+    .chapter-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100px;
+      color: #888;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
+    }
+
+    /* Error state for failed chapters */
+    .chapter-error {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100px;
+      padding: 20px;
+      color: #c00;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    /* Hide scrollbars but keep scrolling */
+    body::-webkit-scrollbar {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="chapters"></div>
+  <script type="text/javascript">window.readium = window.readium || { isFixedLayout: true };</script>
+  <script type="text/javascript" src="{{ASSETS_URL}}/scripts/readium-continuous-wrapper.js"></script>
+  <script type="text/javascript" src="{{ASSETS_URL}}/scripts/readium-continuous-wrapper-shim.js"></script>
+</body>
+</html>

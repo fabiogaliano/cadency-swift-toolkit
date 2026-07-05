@@ -21,25 +21,29 @@ window.addEventListener(
   false
 );
 
-// Notify native code that the page has loaded.
-window.addEventListener(
-  "load",
-  function () {
-    var pendingResize;
-    const observer = new ResizeObserver(() => {
-      if (pendingResize) {
-        window.cancelAnimationFrame(pendingResize);
-      }
+const hasReadium = typeof window.readium !== "undefined";
 
-      pendingResize = window.requestAnimationFrame(function () {
-        onViewportWidthChanged();
-        onScroll();
+// Notify native code that the page has loaded.
+if (hasReadium) {
+  window.addEventListener(
+    "load",
+    function () {
+      var pendingResize;
+      const observer = new ResizeObserver(() => {
+        if (pendingResize) {
+          window.cancelAnimationFrame(pendingResize);
+        }
+
+        pendingResize = window.requestAnimationFrame(function () {
+          onViewportWidthChanged();
+          onScroll();
+        });
       });
-    });
-    observer.observe(document.body);
-  },
-  false
-);
+      observer.observe(document.body);
+    },
+    false
+  );
+}
 
 function onViewportWidthChanged() {
   viewportWidth = window.innerWidth;
@@ -87,7 +91,9 @@ function notifyProgressions(progressions) {
   webkit.messageHandlers.progressionChanged.postMessage(progressions);
 }
 
-window.addEventListener("scroll", onScroll);
+if (hasReadium) {
+  window.addEventListener("scroll", onScroll);
+}
 
 function onScroll() {
   if (readium.isFixedLayout) {
@@ -131,12 +137,14 @@ function onScroll() {
   ticking = true;
 }
 
-document.addEventListener(
-  "selectionchange",
-  debounce(50, function () {
-    webkit.messageHandlers.selectionChanged.postMessage(getCurrentSelection());
-  })
-);
+if (hasReadium) {
+  document.addEventListener(
+    "selectionchange",
+    debounce(50, function () {
+      webkit.messageHandlers.selectionChanged.postMessage(getCurrentSelection());
+    })
+  );
+}
 
 export function getColumnCountPerScreen() {
   return parseInt(

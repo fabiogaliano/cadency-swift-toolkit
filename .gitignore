@@ -1,5 +1,13 @@
 .DS_Store
 
+# Generated JS bundles (rebuild with: make bundle)
+# These are webpack outputs, not the shim files
+Sources/Navigator/EPUB/Assets/Static/scripts/readium-reflowable.js
+Sources/Navigator/EPUB/Assets/Static/scripts/readium-fixed.js
+Sources/Navigator/EPUB/Assets/Static/scripts/readium-fixed-wrapper-one.js
+Sources/Navigator/EPUB/Assets/Static/scripts/readium-fixed-wrapper-two.js
+Sources/Navigator/EPUB/Assets/Static/scripts/readium-continuous-wrapper.js
+Sources/Navigator/EPUB/Assets/Static/scripts/*.js.map
 
 # Swift Package Manager
 .build/

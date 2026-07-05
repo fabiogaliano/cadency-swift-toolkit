@@ -3,7 +3,8 @@ SCRIPTS_PATH := Sources/Navigator/EPUB/Scripts
 help:
 	@echo "Usage: make <target>\n\n\
 	  carthage-proj\t\tGenerate the Carthage Xcode project\n\
-	  scripts\t\tBundle the Navigator EPUB scripts\n\
+	  scripts\t\tBundle the Navigator EPUB scripts (full: install + lint + bundle)\n\
+	  bundle\t\tBundle the Navigator EPUB scripts (quick: bundle only)\n\
 	  test\t\t\tRun unit tests\n\
 	  lint-format\t\tVerify formatting\n\
 	  format\t\tFormat sources\n\
@@ -30,6 +31,10 @@ scripts:
 	pnpm run format; \
 	pnpm run lint; \
 	pnpm run bundle
+
+.PHONY: bundle
+bundle:
+	cd $(SCRIPTS_PATH) && pnpm run bundle
 
 .PHONY: update-scripts
 update-scripts:

@@ -8,6 +8,7 @@ module.exports = {
     fixed: "./src/index-fixed.js",
     "fixed-wrapper-one": "./src/index-fixed-wrapper-one.js",
     "fixed-wrapper-two": "./src/index-fixed-wrapper-two.js",
+    "continuous-wrapper": "./src/index-continuous-wrapper.js",
   },
   output: {
     filename: "readium-[name].js",
