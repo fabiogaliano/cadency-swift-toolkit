@@ -15,7 +15,10 @@ public enum JSONError: Error {
 
 public func serializeJSONString(_ object: Any) -> String? {
     guard
-        let data = try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys),
+        // `.fragmentsAllowed` lets bare strings/numbers serialize (e.g. a decoration
+        // group name → a quoted JS string literal). Without it, JSONSerialization
+        // raises an uncatchable NSException on top-level fragments.
+        let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .fragmentsAllowed]),
         let string = String(data: data, encoding: .utf8)
     else {
         return nil

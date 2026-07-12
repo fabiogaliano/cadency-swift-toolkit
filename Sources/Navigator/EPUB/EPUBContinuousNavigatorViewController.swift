@@ -223,6 +223,13 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private var decorations: [String: [DiffableDecoration]] = [:]
     private var decorationCallbacks: [String: [DecorableNavigator.OnActivatedCallback]] = [:]
 
+    /// The reflowable Readium script, injected into each chapter iframe so the
+    /// chapter document exposes `window.readium` (decorations, selection, gestures).
+    /// The main wrapper frame runs `readium-continuous-wrapper.js` instead.
+    private static let reflowableScript: String? = Bundle.module
+        .url(forResource: "readium-reflowable", withExtension: "js", subdirectory: "Assets/Static/scripts")
+        .flatMap { try? String(contentsOf: $0) }
+
     // MARK: - Initialization
 
     /// Creates a new continuous scroll navigator.
@@ -366,6 +373,18 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         view.addSubview(webView)
 
         enableJSMessages()
+
+        // Give each chapter iframe the reflowable Readium API (window.readium) by
+        // injecting the reflowable script into subframes only. Without this, the
+        // chapter documents have no `getDecorations`/selection support and the
+        // wrapper's applyDecorationsToIframe silently no-ops. Guard to subframes so
+        // the main wrapper frame keeps its own window.readium.
+        if let reflowable = Self.reflowableScript {
+            let subframeOnly = "if (window.top !== window.self) {\n\(reflowable)\n}"
+            webView.configuration.userContentController.addUserScript(
+                WKUserScript(source: subframeOnly, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+            )
+        }
 
         delegate?.navigator(self, setupUserScripts: webView.configuration.userContentController)
     }
