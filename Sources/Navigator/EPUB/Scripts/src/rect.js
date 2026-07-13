@@ -24,6 +24,32 @@ export function toNativeRect(rect) {
 }
 
 /**
+ * Converts an iframe-local rect (e.g. `rangeLocalRect` in `selection.js`)
+ * into top-level WKWebView viewport coordinates for the block-activation
+ * rect contract: adds the iframe's own on-screen offset, but - unlike
+ * `adjustPointToViewport`/`toNativeRect` above - deliberately does *not* also
+ * add the outer document's scroll offset, which would turn a viewport-
+ * relative rect into a document-relative one. Kept separate on purpose: the
+ * two coordinate spaces are not interchangeable, and reusing `toNativeRect`
+ * here would silently corrupt the rect for continuous-scroll content.
+ */
+export function toTopViewportRect(rect) {
+  if (!frameElement) {
+    return rect;
+  }
+  const frameRect = frameElement.getBoundingClientRect();
+  if (!frameRect) {
+    return rect;
+  }
+  return {
+    x: rect.x + frameRect.x,
+    y: rect.y + frameRect.y,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+/**
  * Adjusts the given coordinates to the viewport for FXL resources.
  */
 export function adjustPointToViewport(point) {
