@@ -182,9 +182,15 @@ function tryPairAccidentalSelectionTap(event) {
   }
 
   clearTimeout(pendingSingleTap.timer);
-  const activatedBlock = pendingSingleTap.block;
+  const pending = pendingSingleTap;
   pendingSingleTap = null;
-  activateBlock(activatedBlock);
+  if (!activateBlock(pending.block)) {
+    // Same fallback as the ordinary pairing path: a failed activation emits
+    // the pending first tap exactly once rather than dropping both taps. The
+    // accidental selection is deliberately left in place - only a successful
+    // activation clears it.
+    sendTap(pending.clickEvent);
+  }
   return true;
 }
 
@@ -201,9 +207,14 @@ function handleQualifyingTap(event, clickEvent) {
 
   if (pendingSingleTap && isQualifyingSecondTap(pendingSingleTap, tap)) {
     clearTimeout(pendingSingleTap.timer);
-    const activatedBlock = pendingSingleTap.block;
+    const pending = pendingSingleTap;
     pendingSingleTap = null;
-    activateBlock(activatedBlock);
+    if (!activateBlock(pending.block)) {
+      // A qualifying double tap whose activation failed (no Locator/payload,
+      // an unusable rect, or a postMessage error) must not swallow both taps:
+      // fall back to emitting the first tap's normal tap exactly once.
+      sendTap(pending.clickEvent);
+    }
     return;
   }
 
@@ -288,18 +299,22 @@ function sendTap(clickEvent) {
   webkit.messageHandlers.tap.postMessage(clickEvent);
 }
 
+// Attempts to report a block activation to native. Returns true only once the
+// `blockActivated` message has actually been posted; returns false on any
+// failure (no Locator/payload, an unusable rect, or a postMessage error) so the
+// caller can fall back to emitting the pending single tap instead of losing it.
 function activateBlock(blockElement) {
   try {
     const payload = buildBlockActivationPayload(blockElement);
     if (!payload) {
-      return;
+      return false;
     }
 
     const rect = toTopViewportRect(payload.iframeRect);
     if (!isFiniteNativeRect(rect)) {
       // Pre-check so a coordinate-conversion edge case never reaches Swift,
       // which strictly drops rects that aren't finite/positive anyway.
-      return;
+      return false;
     }
 
     webkit.messageHandlers.blockActivated.postMessage({
@@ -308,9 +323,13 @@ function activateBlock(blockElement) {
       blockKey: payload.blockKey,
     });
 
+    // Clear the accidental WebKit word selection only now that activation has
+    // actually been reported - a failed activation leaves any selection intact.
     clearAccidentalWordSelection();
+    return true;
   } catch (e) {
     logError(e);
+    return false;
   }
 }
 

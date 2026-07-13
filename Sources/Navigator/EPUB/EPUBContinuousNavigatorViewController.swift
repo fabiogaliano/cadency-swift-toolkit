@@ -600,6 +600,13 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             await evaluateScript("continuousWrapper.registerDecorationTemplates(\(templatesJSON));")
         }
 
+        // Replay decoration groups that were applied before the wrapper finished
+        // loading (or before a CSS-triggered wrapper reload), so initial and
+        // in-flight decorations survive wrapper (re)initialization.
+        for (group, diffables) in decorations {
+            await sendDecorations(diffables, in: group)
+        }
+
         // Navigate to initial location if provided
         if let initialLocation = currentLocation {
             await go(to: initialLocation, options: NavigatorGoOptions(animated: false))
@@ -626,11 +633,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             let href = AnyURL(string: hrefString)
         else { return }
 
-        // Apply pending decorations for this chapter
-        Task {
-            await applyDecorationsToChapter(at: spineIndex)
-        }
-
+        // The continuous wrapper reapplies each group's retained snapshot to a
+        // chapter as it mounts (applyStoredSettingsToIframe), so no native
+        // per-chapter reapplication is needed here.
         delegate?.navigator(self, didMountChapterAt: spineIndex, href: href)
     }
 
@@ -978,60 +983,44 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     public func apply(decorations: [Decoration], in group: String) {
         Task {
-            guard isWrapperLoaded else { return }
-
             let normalizedDecorations = decorations.map {
                 var d = $0
                 d.locator = publication.normalizeLocator(d.locator)
                 return DiffableDecoration(decoration: d)
             }
 
+            // Store the group's latest normalized snapshot unconditionally so it
+            // survives a not-yet-loaded wrapper; only the JS evaluation is gated.
+            // initializeWrapper replays stored groups once the wrapper loads, so
+            // initial decorations are never lost.
             self.decorations[group] = normalizedDecorations
 
-            let decorationData = normalizedDecorations.map { diffable -> [String: Any] in
-                let d = diffable.decoration
-                return [
-                    "id": d.id,
-                    "locator": d.locator.json,
-                    "style": d.style.id.rawValue,
-                    "element": config.decorationTemplates[d.style.id]?.element(d) ?? "",
-                ]
-            }
-
-            guard
-                let groupJSON = serializeJSONString(group),
-                let decsJSON = serializeJSONString(decorationData)
-            else { return }
-
-            await evaluateScript("continuousWrapper.applyDecorations(\(groupJSON), \(decsJSON));")
+            guard isWrapperLoaded else { return }
+            await sendDecorations(normalizedDecorations, in: group)
         }
     }
 
-    private func applyDecorationsToChapter(at spineIndex: Int) async {
-        guard spineIndex < readingOrder.count else { return }
-        let href = readingOrder[spineIndex].url()
-
-        for (group, decs) in decorations {
-            let chapterDecorations = decs.filter { $0.decoration.locator.href.isEquivalentTo(href) }
-            guard !chapterDecorations.isEmpty else { continue }
-
-            let decorationData = chapterDecorations.map { diffable -> [String: Any] in
-                let d = diffable.decoration
-                return [
-                    "id": d.id,
-                    "locator": d.locator.json,
-                    "style": d.style.id.rawValue,
-                    "element": config.decorationTemplates[d.style.id]?.element(d) ?? "",
-                ]
-            }
-
-            guard
-                let groupJSON = serializeJSONString(group),
-                let decsJSON = serializeJSONString(decorationData)
-            else { continue }
-
-            await evaluateScript("continuousWrapper.applyDecorations(\(groupJSON), \(decsJSON));")
+    /// Sends a group's complete decoration snapshot to the continuous wrapper.
+    /// The wrapper treats it as the full set for the group across all chapters
+    /// and reconciles every loaded chapter against it. A no-op when the wrapper
+    /// isn't loaded, since `evaluateScript` gates on `isWrapperLoaded`.
+    private func sendDecorations(_ diffables: [DiffableDecoration], in group: String) async {
+        let decorationData = diffables.map { diffable -> [String: Any] in
+            let d = diffable.decoration
+            return [
+                "id": d.id,
+                "locator": d.locator.json,
+                "style": d.style.id.rawValue,
+                "element": config.decorationTemplates[d.style.id]?.element(d) ?? "",
+            ]
         }
+
+        guard
+            let groupJSON = serializeJSONString(group),
+            let decsJSON = serializeJSONString(decorationData)
+        else { return }
+
+        await evaluateScript("continuousWrapper.applyDecorations(\(groupJSON), \(decsJSON));")
     }
 
     public func observeDecorationInteractions(inGroup group: String, onActivated: @escaping OnActivatedCallback) {

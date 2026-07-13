@@ -284,7 +284,8 @@ function onIframeLoaded(spineIndex, iframe) {
   // Show iframe
   iframe.style.opacity = "1";
 
-  // Apply any pending decorations for this chapter
+  // Decorations were already reapplied above via applyStoredSettingsToIframe;
+  // this only notifies native so the mount reaches the navigator delegate.
   notifyChapterMounted(spineIndex);
 
   // Check if all initial chapters are loaded
@@ -384,13 +385,16 @@ function applyStoredSettingsToIframe(spineIndex, iframe) {
   const item = spineItems[spineIndex];
   if (!item) return;
 
-  const hrefPrefix = `${item.href}:`;
-  for (const [key, decs] of pendingDecorations.entries()) {
-    if (!key.startsWith(hrefPrefix)) continue;
-    const groupName = key.slice(hrefPrefix.length);
-    applyDecorationsToIframe(iframe, groupName, decs);
-    pendingDecorations.delete(key);
-  }
+  // Reapply each group's current snapshot subset for this chapter. A group whose
+  // snapshot no longer covers this chapter resolves to an empty set and clears,
+  // so decorations removed while the chapter was unmounted do not reappear.
+  groupDecorations.forEach((decorations, groupName) => {
+    applyDecorationsToIframe(
+      iframe,
+      groupName,
+      decorationsForSpineIndex(decorations, spineIndex)
+    );
+  });
 }
 
 // ============================================================================
@@ -1009,42 +1013,45 @@ function notifyChapterMounted(spineIndex) {
 // Decorations
 // ============================================================================
 
-// Pending decorations by href
-const pendingDecorations = new Map();
+// Latest complete decoration snapshot per group. Each applyDecorations call
+// replaces a group's entry wholesale: a group is always the full set of
+// decorations across every chapter, never a delta. Retained so chapters that
+// mount (or remount) later reapply exactly this set and previously-removed
+// decorations never reappear.
+const groupDecorations = new Map();
 
 // Decoration groups which should forward activation events.
 const activableDecorationGroups = new Set();
 
+// Decorations from `decorations` whose locator resolves to `spineIndex`, using
+// the same fuzzy href matching the rest of the wrapper relies on.
+function decorationsForSpineIndex(decorations, spineIndex) {
+  return decorations.filter(
+    (decoration) =>
+      findSpineIndexByHref(decoration.locator?.href || "") === spineIndex
+  );
+}
+
 /**
- * Apply decorations to a specific chapter or all loaded chapters.
+ * Apply a group's complete decoration snapshot.
+ *
+ * `decorations` is the full set for the group across all chapters. Every loaded
+ * chapter is reconciled against it - including chapters with no decorations in
+ * the snapshot, whose group is cleared - so removing a decoration (or passing an
+ * empty array) takes effect everywhere, not just where a decoration still lives.
  * @param {string} groupName - Decoration group name
- * @param {Array} decorations - Array of decoration objects
+ * @param {Array} decorations - Complete decoration snapshot for the group
  */
 function applyDecorations(groupName, decorations) {
-  // Group decorations by href
-  const byHref = new Map();
+  groupDecorations.set(groupName, decorations);
 
-  decorations.forEach((decoration) => {
-    const href = decoration.locator?.href || "";
-    if (!byHref.has(href)) {
-      byHref.set(href, []);
-    }
-    byHref.get(href).push(decoration);
-  });
-
-  // Apply to loaded iframes
-  byHref.forEach((decs, href) => {
-    const spineIndex = findSpineIndexByHref(href);
-    if (spineIndex === -1) return;
-
-    const iframe = loadedIframes.get(spineIndex);
-    if (iframe && chapterStates.get(spineIndex) === "loaded") {
-      applyDecorationsToIframe(iframe, groupName, decs);
-    } else {
-      // Store for later application
-      const key = `${href}:${groupName}`;
-      pendingDecorations.set(key, decs);
-    }
+  loadedIframes.forEach((iframe, spineIndex) => {
+    if (chapterStates.get(spineIndex) !== "loaded") return;
+    applyDecorationsToIframe(
+      iframe,
+      groupName,
+      decorationsForSpineIndex(decorations, spineIndex)
+    );
   });
 }
 
