@@ -3,9 +3,20 @@
    identically under the default/rtl/cjk-horizontal/cjk-vertical stylesheet folders. Every
    rule below is scoped to Readium's a11y-normalization root flag (readium-a11y-on), which
    ReadiumCSS.swift sets whenever EPUBSettings.textNormalization is true. When normalization
-   is off, none of this fires and publisher styling is left untouched.
+   is off, none of this fires and publisher styling is left untouched — except the ungated
+   touch-action rule right below, which is gesture plumbing, not styling.
    Logical properties (inline/block, start/end) are used throughout instead of left/right/
    top/bottom so RTL and CJK vertical writing-mode keep working without per-layout variants. */
+
+/* Deliberately ungated: touch-action: manipulation removes WebKit's double-tap click
+   delay for every reflowable book, normalized or not. It does NOT stop the double-tap
+   pan-to-center: with zoom pinned, WKContentView's non-blocking double-tap recognizer
+   triggers smart magnification whenever the tap isn't handled as a click, and that path
+   never consults touch-action. The pan is suppressed natively instead
+   (EPUBContinuousNavigatorViewController, webKitDoubleTapZoomEnabled). */
+html {
+  touch-action: manipulation;
+}
 
 :root[style*="readium-a11y-on"] {
   --cadency-flow-space: calc(var(--USER__paraSpacing, 1rem) * 1.5);

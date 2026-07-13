@@ -761,8 +761,11 @@ body {
 
 /* If there are inline-block elements in paragraphs, text-indent will inherit so we must reset it */
 
-:root[style*="readium-advanced-on"][style*="--USER__paraIndent"] p *,
-:root[style*="readium-advanced-on"][style*="--USER__paraIndent"] p:first-letter {
+/* Cadency: upstream also lists `p:first-letter` here, but any ::first-letter style makes
+   WebKit's Range.getClientRects() misreport the first line's rect by one glyph (fixed only
+   in Safari TP 243), which made block-highlight decorations miss the first character.
+   text-indent doesn't apply to ::first-letter anyway, so dropping it changes nothing. */
+:root[style*="readium-advanced-on"][style*="--USER__paraIndent"] p * {
   text-indent: 0 !important;
 }
 

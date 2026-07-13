@@ -54,7 +54,8 @@ window.addEventListener("DOMContentLoaded", function () {
   document.addEventListener("pointercancel", onPointerCancel, false);
 
   document.addEventListener("selectionchange", function () {
-    isSelecting = !window.getSelection().isCollapsed;
+    const selection = window.getSelection();
+    isSelecting = selection != null && !selection.isCollapsed;
   });
 
   observeOuterScrollForCancellation();
@@ -348,15 +349,28 @@ function isFiniteNativeRect(rect) {
 // WebKit can select the word under the second tap as a side effect of the
 // raw touch, independent of our own click-based arbitration. Clear it only
 // now that we've confirmed this was a block-activating double tap - never
-// proactively, so long-press selection and its handles are untouched, and
-// deferred a frame so it runs after any such WebKit side effect has landed.
+// proactively, so long-press selection and its handles are untouched.
+//
+// WebKit applies that side-effect selection on its own schedule - sometimes
+// after the next frame - and a missed clear is costly: the stale selection
+// makes the guard in `onClick` silently eat every subsequent tap. So instead
+// of betting on one frame, keep clearing any selection that appears within a
+// short window after the confirmed activation. The window is far shorter than
+// a long-press, so a deliberate new selection can't get caught in it.
+const ACCIDENTAL_SELECTION_CLEAR_WINDOW_MS = 300;
+
 function clearAccidentalWordSelection() {
-  requestAnimationFrame(() => {
+  const clearIfAny = () => {
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed) {
       selection.removeAllRanges();
     }
-  });
+  };
+  document.addEventListener("selectionchange", clearIfAny);
+  setTimeout(() => {
+    document.removeEventListener("selectionchange", clearIfAny);
+  }, ACCIDENTAL_SELECTION_CLEAR_WINDOW_MS);
+  requestAnimationFrame(clearIfAny);
 }
 
 function onPointerDown(event) {

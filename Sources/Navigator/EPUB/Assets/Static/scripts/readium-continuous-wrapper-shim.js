@@ -7,7 +7,7 @@
     var cw = globalThis.continuousWrapper;
     if (!cw) return;
 
-    var pending = new Map();
+    var decorationSnapshots = new Map();
     var activable = new Set();
     var templates = null;
     var cssProps = null;
@@ -23,6 +23,15 @@
 
     function getReadium(iframe) {
       return iframe && iframe.contentWindow ? iframe.contentWindow.readium : null;
+    }
+
+    function decorationsForIframe(iframe, decorations) {
+      var iframeHref = iframe.getAttribute("data-href") || "";
+      return decorations.filter(function (decoration) {
+        var href = decoration && decoration.locator ? (decoration.locator.href || "") : "";
+        if (!href || !iframeHref) return false;
+        return href === iframeHref || href.indexOf(iframeHref) !== -1 || iframeHref.indexOf(href) !== -1;
+      });
     }
 
     function applyToIframe(iframe, groupName, decorations) {
@@ -57,14 +66,8 @@
         } catch (e) { }
       }
 
-      var href = iframe.getAttribute("data-href") || "";
-      if (!href) return;
-
-      var prefix = href + ":";
-      pending.forEach(function (decs, key) {
-        if (key.indexOf(prefix) !== 0) return;
-        applyToIframe(iframe, key.slice(prefix.length), decs);
-        pending.delete(key);
+      decorationSnapshots.forEach(function (decorations, groupName) {
+        applyToIframe(iframe, groupName, decorationsForIframe(iframe, decorations));
       });
     }
 
@@ -162,24 +165,10 @@
     };
 
     cw.applyDecorations = function (groupName, decorations) {
-      var byHref = new Map();
-      for (var i = 0; i < decorations.length; i++) {
-        var d = decorations[i];
-        var href = d && d.locator ? (d.locator.href || "") : "";
-        if (!byHref.has(href)) byHref.set(href, []);
-        byHref.get(href).push(d);
-      }
+      decorationSnapshots.set(groupName, decorations);
 
-      byHref.forEach(function (decs, href) {
-        var wrapper = findChapterWrapperByHref(href);
-        var iframe = wrapper ? wrapper.querySelector('iframe.chapter-iframe') : null;
-        var key = href + ":" + groupName;
-
-        if (iframe && getReadium(iframe)) {
-          applyToIframe(iframe, groupName, decs);
-        } else {
-          pending.set(key, decs);
-        }
+      forEachIframe(function (iframe) {
+        applyToIframe(iframe, groupName, decorationsForIframe(iframe, decorations));
       });
 
       return true;

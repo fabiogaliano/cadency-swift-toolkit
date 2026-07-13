@@ -7,7 +7,7 @@
 // Script for the continuous scroll wrapper document.
 // This orchestrates multiple chapter iframes for vertical continuous scrolling.
 
-import { log, logError, logErrorMessage } from "./utils";
+import { log } from "./utils";
 
 // Polyfill for ResizeObserver on older iOS versions
 import { ResizeObserver as ResizeObserverPolyfill } from "@juggle/resize-observer";
@@ -104,7 +104,8 @@ function applyIframeHeightChange(spineIndex, iframe, newHeight) {
     return;
   }
 
-  const needsAnchor = !isAnchoringSuppressed() && isChapterAboveViewport(spineIndex);
+  const needsAnchor =
+    !isAnchoringSuppressed() && isChapterAboveViewport(spineIndex);
   if (needsAnchor) {
     saveScrollAnchor();
   }
@@ -195,7 +196,10 @@ function createChapterElement(spineIndex) {
  * Mount an iframe for a chapter.
  */
 function mountChapter(spineIndex) {
-  if (chapterStates.get(spineIndex) === "loaded" || chapterStates.get(spineIndex) === "loading") {
+  if (
+    chapterStates.get(spineIndex) === "loaded" ||
+    chapterStates.get(spineIndex) === "loading"
+  ) {
     return;
   }
 
@@ -214,7 +218,9 @@ function mountChapter(spineIndex) {
 
   // Replace spacer with loading indicator
   wrapper.innerHTML = "";
-  wrapper.style.minHeight = `${chapterHeights.get(spineIndex) || config.defaultChapterHeight}px`;
+  wrapper.style.minHeight = `${
+    chapterHeights.get(spineIndex) || config.defaultChapterHeight
+  }px`;
   const loading = document.createElement("div");
   loading.className = "chapter-loading";
   loading.textContent = "Loading...";
@@ -227,7 +233,9 @@ function mountChapter(spineIndex) {
   iframe.dataset.href = item.href;
   // Hide iframe until loaded
   iframe.style.opacity = "0";
-  iframe.style.height = `${chapterHeights.get(spineIndex) || config.defaultChapterHeight}px`;
+  iframe.style.height = `${
+    chapterHeights.get(spineIndex) || config.defaultChapterHeight
+  }px`;
 
   iframe.addEventListener("load", () => {
     onIframeLoaded(spineIndex, iframe);
@@ -327,7 +335,10 @@ function unmountChapter(spineIndex) {
   // Save scroll anchor before DOM changes
   saveScrollAnchor();
 
-  const height = wrapper.offsetHeight || chapterHeights.get(spineIndex) || config.defaultChapterHeight;
+  const height =
+    wrapper.offsetHeight ||
+    chapterHeights.get(spineIndex) ||
+    config.defaultChapterHeight;
   chapterHeights.set(spineIndex, height);
 
   // Replace with spacer
@@ -373,13 +384,17 @@ function applyStoredSettingsToIframe(spineIndex, iframe) {
   if (window._decorationTemplates) {
     try {
       readium.registerDecorationTemplates(window._decorationTemplates);
-    } catch (e) { }
+    } catch (e) {
+      // Iframe readium not ready; templates reapply on next mount.
+    }
   }
 
   if (window._cssProperties) {
     try {
       readium.setCSSProperties(window._cssProperties);
-    } catch (e) { }
+    } catch (e) {
+      // Iframe readium not ready; properties reapply on next mount.
+    }
   }
 
   const item = spineItems[spineIndex];
@@ -470,7 +485,10 @@ function updateIframeHeight(spineIndex, iframe) {
       }
 
       // Save anchor before height change
-      const needsAnchor = !isUserScrolling && !isAnchoringSuppressed() && isChapterAboveViewport(spineIndex);
+      const needsAnchor =
+        !isUserScrolling &&
+        !isAnchoringSuppressed() &&
+        isChapterAboveViewport(spineIndex);
       if (needsAnchor) {
         saveScrollAnchor();
       }
@@ -511,7 +529,6 @@ function saveScrollAnchor() {
   if (isAnchoringSuppressed()) return;
 
   // Find the first visible element to use as anchor
-  const viewportTop = window.scrollY;
   const chapters = document.querySelectorAll(".chapter");
 
   for (const chapter of chapters) {
@@ -677,7 +694,9 @@ function onScroll() {
     }
   }
 
-  const centerIndex = isUserScrolling ? estimatedCenterIndex : activeChapterIndex;
+  const centerIndex = isUserScrolling
+    ? estimatedCenterIndex
+    : activeChapterIndex;
   updateMountedChapters(centerIndex);
   notifyProgressionChanged();
 }
@@ -695,7 +714,10 @@ function onActiveChapterChanged(spineIndex) {
  */
 function updateMountedChapters(centerIndex) {
   const start = Math.max(0, centerIndex - config.prefetchBehind);
-  const end = Math.min(spineItems.length - 1, centerIndex + config.prefetchAhead);
+  const end = Math.min(
+    spineItems.length - 1,
+    centerIndex + config.prefetchAhead
+  );
 
   // Mount chapters in the window
   for (let i = start; i <= end; i++) {
@@ -703,7 +725,10 @@ function updateMountedChapters(centerIndex) {
   }
 
   if (isUserScrolling) {
-    const maxMountedDuringFastScroll = Math.max(config.maxMounted * 2, config.maxMounted + 4);
+    const maxMountedDuringFastScroll = Math.max(
+      config.maxMounted * 2,
+      config.maxMounted + 4
+    );
     if (loadedIframes.size > maxMountedDuringFastScroll) {
       const mounted = [];
       loadedIframes.forEach((_, index) => {
@@ -718,7 +743,10 @@ function updateMountedChapters(centerIndex) {
         return distB - distA;
       });
 
-      const toUnmount = mounted.slice(0, loadedIframes.size - maxMountedDuringFastScroll);
+      const toUnmount = mounted.slice(
+        0,
+        loadedIframes.size - maxMountedDuringFastScroll
+      );
       toUnmount.forEach((index) => unmountChapter(index));
     }
     return;
@@ -750,7 +778,6 @@ function updateMountedChapters(centerIndex) {
 // ============================================================================
 
 let initialLoadComplete = false;
-let initialChaptersToLoad = new Set();
 
 function checkInitialLoadComplete() {
   if (initialLoadComplete) return;
@@ -758,7 +785,10 @@ function checkInitialLoadComplete() {
   // Check if all chapters in the initial window are loaded
   const centerIndex = 0;
   const start = Math.max(0, centerIndex - config.prefetchBehind);
-  const end = Math.min(spineItems.length - 1, centerIndex + config.prefetchAhead);
+  const end = Math.min(
+    spineItems.length - 1,
+    centerIndex + config.prefetchAhead
+  );
 
   for (let i = start; i <= end; i++) {
     const state = chapterStates.get(i);
@@ -789,7 +819,11 @@ function goTo(locator) {
 
   for (let i = 0; i < spineItems.length; i++) {
     const item = spineItems[i];
-    if (item.href === href || href.endsWith(item.href) || item.href.endsWith(href)) {
+    if (
+      item.href === href ||
+      href.endsWith(item.href) ||
+      item.href.endsWith(href)
+    ) {
       targetIndex = i;
       break;
     }
@@ -798,7 +832,11 @@ function goTo(locator) {
   if (targetIndex === -1) {
     // Try to find by URL
     for (let i = 0; i < spineItems.length; i++) {
-      if (spineItems[i].url && locator.href && spineItems[i].url.includes(locator.href)) {
+      if (
+        spineItems[i].url &&
+        locator.href &&
+        spineItems[i].url.includes(locator.href)
+      ) {
         targetIndex = i;
         break;
       }
@@ -834,7 +872,6 @@ function scrollToLocatorInChapter(spineIndex, locator) {
         const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
 
         let offsetInChapter = 0;
-        const readium = getIframeReadium(iframe);
         const iframeDoc = iframe.contentDocument;
 
         const selector = locator?.locations?.cssSelector;
@@ -844,24 +881,37 @@ function scrollToLocatorInChapter(spineIndex, locator) {
             if (element) {
               offsetInChapter = element.getBoundingClientRect().top;
             }
-          } catch (e) { }
+          } catch (e) {
+            // Invalid selector; fall through to progression-based offset.
+          }
         }
 
         const progression = locator?.locations?.progression;
         if (offsetInChapter === 0 && typeof progression === "number") {
-          const chapterHeight = getIframeScrollHeight(iframe) || chapterHeights.get(spineIndex) || config.defaultChapterHeight;
-          offsetInChapter = chapterHeight * Math.max(0, Math.min(1, progression));
+          const chapterHeight =
+            getIframeScrollHeight(iframe) ||
+            chapterHeights.get(spineIndex) ||
+            config.defaultChapterHeight;
+          offsetInChapter =
+            chapterHeight * Math.max(0, Math.min(1, progression));
         }
 
         withProgrammaticScroll(
-          () => window.scrollTo({ top: wrapperTop + Math.max(0, offsetInChapter), behavior: "auto" }),
+          () =>
+            window.scrollTo({
+              top: wrapperTop + Math.max(0, offsetInChapter),
+              behavior: "auto",
+            }),
           250
         );
 
         return true;
       } catch (e) {
         // Fallback: just scroll to chapter start
-        withProgrammaticScroll(() => wrapper.scrollIntoView({ behavior: "auto", block: "start" }), 250);
+        withProgrammaticScroll(
+          () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
+          250
+        );
         return true;
       }
     }
@@ -892,7 +942,8 @@ function scrollForward() {
   }
 
   withProgrammaticScroll(
-    () => window.scrollBy({ top: window.innerHeight * 0.9, behavior: "smooth" }),
+    () =>
+      window.scrollBy({ top: window.innerHeight * 0.9, behavior: "smooth" }),
     1500
   );
   return true;
@@ -910,7 +961,8 @@ function scrollBackward() {
   }
 
   withProgrammaticScroll(
-    () => window.scrollBy({ top: -window.innerHeight * 0.9, behavior: "smooth" }),
+    () =>
+      window.scrollBy({ top: -window.innerHeight * 0.9, behavior: "smooth" }),
     1500
   );
   return true;
@@ -951,7 +1003,7 @@ function findFirstVisibleLocator() {
     return null;
   }
 
-  const { spineIndex, iframe, wrapper, rect } = bestChapter;
+  const { spineIndex, iframe } = bestChapter;
   const item = spineItems[spineIndex];
 
   try {
@@ -990,7 +1042,10 @@ function notifyProgressionChanged() {
 
   const maxY = Math.max(1, totalHeight - viewportHeight);
   const firstProgression = Math.max(0, Math.min(1, scrollY / maxY));
-  const lastProgression = Math.max(0, Math.min(1, (scrollY + viewportHeight) / totalHeight));
+  const lastProgression = Math.max(
+    0,
+    Math.min(1, (scrollY + viewportHeight) / totalHeight)
+  );
 
   webkit.messageHandlers.progressionChanged.postMessage({
     first: firstProgression,
@@ -1046,7 +1101,10 @@ function applyDecorations(groupName, decorations) {
   groupDecorations.set(groupName, decorations);
 
   loadedIframes.forEach((iframe, spineIndex) => {
-    if (chapterStates.get(spineIndex) !== "loaded") return;
+    const state = chapterStates.get(spineIndex);
+    if (state !== "loaded") {
+      return;
+    }
     applyDecorationsToIframe(
       iframe,
       groupName,
@@ -1079,7 +1137,11 @@ function applyDecorationsToIframe(iframe, groupName, decorations) {
 function findSpineIndexByHref(href) {
   for (let i = 0; i < spineItems.length; i++) {
     const item = spineItems[i];
-    if (item.href === href || href.endsWith(item.href) || item.href.endsWith(href)) {
+    if (
+      item.href === href ||
+      href.endsWith(item.href) ||
+      item.href.endsWith(href)
+    ) {
       return i;
     }
   }

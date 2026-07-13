@@ -16,6 +16,12 @@
       background: transparent;
       /* Enable native scroll anchoring as a baseline */
       overflow-anchor: auto;
+      /* Removes WebKit's double-tap click delay. It cannot stop the double-tap
+         pan-to-center (WKContentView's non-blocking double-tap → smart magnification
+         fallback ignores touch-action); that is suppressed natively in
+         EPUBContinuousNavigatorViewController. Chapter iframes get the same rule
+         from CadencyReader.css. */
+      touch-action: manipulation;
     }
 
     body {

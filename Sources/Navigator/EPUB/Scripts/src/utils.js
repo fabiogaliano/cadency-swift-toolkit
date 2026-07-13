@@ -141,7 +141,9 @@ if (hasReadium) {
   document.addEventListener(
     "selectionchange",
     debounce(50, function () {
-      webkit.messageHandlers.selectionChanged.postMessage(getCurrentSelection());
+      webkit.messageHandlers.selectionChanged.postMessage(
+        getCurrentSelection()
+      );
     })
   );
 }

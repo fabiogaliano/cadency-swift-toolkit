@@ -114,6 +114,15 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         /// Logs state changes when true.
         public var debugState: Bool
 
+        /// Re-enables WebKit's built-in double-tap smart-magnification behavior.
+        ///
+        /// With the wrapper's zoom pinned (`user-scalable=no`), that behavior cannot zoom,
+        /// so WebKit instead pans the double-tapped block toward screen center (its
+        /// documented "user probably intended to scroll" fallback). The navigator reserves
+        /// double-tap for block activation, so this is suppressed by default. Opt in only
+        /// if a reading preset wants the native pan-to-block gesture instead.
+        public var webKitDoubleTapZoomEnabled: Bool
+
         public init(
             preferences: EPUBPreferences = .empty,
             defaults: EPUBDefaults = EPUBDefaults(),
@@ -125,7 +134,8 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             decorationTemplates: [Decoration.Style.Id: HTMLDecorationTemplate] = HTMLDecorationTemplate.defaultTemplates(),
             fontFamilyDeclarations: [AnyHTMLFontFamilyDeclaration] = [],
             readiumCSSRSProperties: CSSRSProperties = CSSRSProperties(),
-            debugState: Bool = false
+            debugState: Bool = false,
+            webKitDoubleTapZoomEnabled: Bool = false
         ) {
             self.preferences = preferences
             self.defaults = defaults
@@ -138,6 +148,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             self.fontFamilyDeclarations = fontFamilyDeclarations
             self.readiumCSSRSProperties = readiumCSSRSProperties
             self.debugState = debugState
+            self.webKitDoubleTapZoomEnabled = webKitDoubleTapZoomEnabled
         }
     }
 
@@ -206,6 +217,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     private var webView: WKWebView!
     private var isWrapperLoaded = false
+
+    #if DEBUG
+        public var diagnosticHandler: ((String) -> Void)?
+    #endif
 
     /// Navigation state.
     private enum State: Equatable {
@@ -401,6 +416,12 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
         view.addSubview(webView)
 
+        // WKContentView's gesture recognizers are installed by the time the next runloop
+        // turn executes; scanning synchronously here would miss them.
+        DispatchQueue.main.async { [weak self] in
+            self?.suppressWebKitDoubleTapPan()
+        }
+
         enableJSMessages()
 
         // Give each chapter iframe the reflowable Readium API (window.readium) by
@@ -416,6 +437,82 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
 
         delegate?.navigator(self, setupUserScripts: webView.configuration.userContentController)
+    }
+
+    // MARK: - WebKit Double-Tap Suppression
+
+    /// KVO pins keeping WebKit's smart-magnification double-tap recognizers disabled,
+    /// keyed by recognizer identity. WebKit re-evaluates their enablement on every
+    /// viewport/layer-tree update, so a one-shot disable does not hold.
+    private var suppressedDoubleTapObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+
+    /// Action selectors of the two WKContentView recognizers feeding
+    /// `SmartMagnificationController`. With the wrapper's zoom pinned, the "non-blocking"
+    /// one is the live path: it flags a pending double tap, and when the web process
+    /// reports the tap was not handled as a click (plain reader text never is), WebKit
+    /// runs the smart-magnification gesture anyway — which, unable to change scale, pans
+    /// the tapped block toward screen center. Double-tap is reserved for block activation
+    /// here, so both entry points are suppressed. `_doubleTapRecognizedForDoubleClick:`
+    /// (dblclick synthesis) is deliberately left alone.
+    private static let smartMagnificationDoubleTapActions = [
+        "_doubleTapRecognized:",
+        "_nonBlockingDoubleTapRecognized:",
+    ]
+
+    private func suppressWebKitDoubleTapPan() {
+        guard !config.webKitDoubleTapZoomEnabled else { return }
+        suppressWebKitDoubleTapPan(in: webView.scrollView)
+    }
+
+    private func suppressWebKitDoubleTapPan(in view: UIView) {
+        for recognizer in view.gestureRecognizers ?? [] {
+            guard
+                let tap = recognizer as? UITapGestureRecognizer,
+                tap.numberOfTapsRequired == 2,
+                tap.numberOfTouchesRequired == 1,
+                suppressedDoubleTapObservations[ObjectIdentifier(tap)] == nil
+            else { continue }
+
+            let actions = Self.recognizerActionsDescription(tap)
+            // If introspection is ever unavailable (UIKit layout change), suppress every
+            // single-touch double-tap recognizer instead: losing dblclick synthesis is
+            // acceptable, the pan is not.
+            let feedsSmartMagnification = actions == "unavailable"
+                || Self.smartMagnificationDoubleTapActions.contains { actions.contains($0) }
+            guard feedsSmartMagnification else { continue }
+
+            tap.isEnabled = false
+            suppressedDoubleTapObservations[ObjectIdentifier(tap)] = tap.observe(
+                \.isEnabled, options: [.new]
+            ) { recognizer, change in
+                if change.newValue == true {
+                    recognizer.isEnabled = false
+                }
+            }
+
+            #if DEBUG
+                diagnosticHandler?(
+                    "suppressed-webkit-double-tap id=\(ObjectIdentifier(tap)) type=\(String(describing: type(of: tap))) actions=\(actions)"
+                )
+            #endif
+        }
+        for subview in view.subviews {
+            suppressWebKitDoubleTapPan(in: subview)
+        }
+    }
+
+    /// Introspects a recognizer's target/action pairs via the private `_targets` ivar;
+    /// each entry renders like `(action=_doubleTapRecognized:, target=<WKContentView …>)`.
+    /// Guarded by an ivar-existence check so a UIKit layout change degrades to
+    /// "unavailable" instead of an unhandled KVC exception.
+    private static func recognizerActionsDescription(_ recognizer: UIGestureRecognizer) -> String {
+        guard class_getInstanceVariable(UIGestureRecognizer.self, "_targets") != nil,
+              let targets = recognizer.value(forKey: "targets") as? [AnyObject],
+              !targets.isEmpty
+        else {
+            return "unavailable"
+        }
+        return targets.map { String(describing: $0) }.joined(separator: " ")
     }
 
     private func initialize() async {
@@ -984,9 +1081,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     public func apply(decorations: [Decoration], in group: String) {
         Task {
             let normalizedDecorations = decorations.map {
-                var d = $0
-                d.locator = publication.normalizeLocator(d.locator)
-                return DiffableDecoration(decoration: d)
+                var decoration = $0
+                decoration.locator = publication.normalizeLocator(decoration.locator)
+                return DiffableDecoration(decoration: decoration)
             }
 
             // Store the group's latest normalized snapshot unconditionally so it
@@ -1020,7 +1117,8 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             let decsJSON = serializeJSONString(decorationData)
         else { return }
 
-        await evaluateScript("continuousWrapper.applyDecorations(\(groupJSON), \(decsJSON));")
+        // evaluateScript already logs evaluation failures.
+        _ = await evaluateScript("continuousWrapper.applyDecorations(\(groupJSON), \(decsJSON));")
     }
 
     public func observeDecorationInteractions(inGroup group: String, onActivated: @escaping OnActivatedCallback) {
@@ -1107,6 +1205,10 @@ extension EPUBContinuousNavigatorViewController: WKNavigationDelegate {
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         log(.debug, "Wrapper navigation finished")
+
+        // WebKit can recreate its double-tap recognizers across navigations; re-pin any
+        // new instances.
+        suppressWebKitDoubleTapPan()
 
         webView.evaluateJavaScript(
             """
