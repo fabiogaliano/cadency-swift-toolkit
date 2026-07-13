@@ -300,6 +300,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
         super.init(nibName: nil, bundle: nil)
 
+        viewModel.delegate = self
         viewModel.editingActions.delegate = self
 
         setupLegacyInputCallbacks(
@@ -911,15 +912,12 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         // Always force scroll mode for continuous navigation
         modifiedPreferences.scroll = true
 
+        // The view model applies the new settings and, for non-layout-changing
+        // updates (font size, theme, …), calls back through
+        // `EPUBNavigatorViewModelDelegate.runScript` so the CSS reaches the
+        // mounted chapter iframes and is stored for chapters mounted later.
         viewModel.submitPreferences(modifiedPreferences)
         view.backgroundColor = settings.effectiveBackgroundColor.uiColor
-
-        // Update CSS properties in loaded iframes
-        Task {
-            guard isWrapperLoaded else { return }
-            // CSS property application is handled by the iframe documents
-            // when they receive the updated settings via their own mechanisms
-        }
 
         delegate?.navigator(self, presentationDidChange: presentation)
     }
@@ -1056,6 +1054,68 @@ extension EPUBContinuousNavigatorViewController: WKNavigationDelegate {
         }
 
         decisionHandler(policy)
+    }
+}
+
+// MARK: - EPUBNavigatorViewModelDelegate
+
+extension EPUBContinuousNavigatorViewController: EPUBNavigatorViewModelDelegate {
+    /// The prefix of the per-resource CSS call the view model emits for the
+    /// paginated navigator. In continuous mode the chapters are iframes inside
+    /// the wrapper document, so the call is re-targeted to the wrapper API.
+    private nonisolated static let readiumCSSPropertiesCall = "readium.setCSSProperties("
+
+    func epubNavigatorViewModel(_ viewModel: EPUBNavigatorViewModel, runScript script: String, in scope: EPUBScriptScope) {
+        guard let wrapperScript = Self.continuousWrapperScript(for: script, in: scope) else {
+            log(.warning, "Ignoring unsupported continuous navigator script for scope \(scope): \(script)")
+            return
+        }
+
+        Task {
+            await evaluateScript(wrapperScript)
+        }
+    }
+
+    /// Re-targets a view-model script from the reflowable per-resource API
+    /// (`window.readium`) to the continuous wrapper API (`continuousWrapper`),
+    /// which fans the properties out to every mounted iframe and stores them for
+    /// chapters mounted later (`window._cssProperties`). Returns `nil` for
+    /// scripts that don't apply to continuous mode rather than silently
+    /// mis-routing them.
+    nonisolated static func continuousWrapperScript(for script: String, in scope: EPUBScriptScope) -> String? {
+        switch scope {
+        case .loadedResources:
+            guard script.hasPrefix(readiumCSSPropertiesCall) else {
+                return nil
+            }
+            return "continuousWrapper." + script.dropFirst("readium.".count)
+
+        case .currentResource, .resource:
+            return nil
+        }
+    }
+
+    func epubNavigatorViewModelInvalidatePaginationView(_ viewModel: EPUBNavigatorViewModel) {
+        // Continuous mode has no paginated spreads to rebuild. Layout-changing
+        // settings (reading progression, language, vertical text, …) alter the
+        // CSS injected into each resource, so reload the wrapper to re-fetch
+        // every chapter with the new styles; the pending locator, seeded from
+        // `currentLocation`, restores the reading position after reload.
+        isWrapperLoaded = false
+        pendingLocationUpdateTask?.cancel()
+        Task { [weak self] in
+            await self?.loadWrapper()
+        }
+    }
+
+    func epubNavigatorViewModel(
+        _ viewModel: EPUBNavigatorViewModel,
+        didFailToLoadResourceAt href: RelativeURL,
+        withError error: ReadError
+    ) {
+        DispatchQueue.main.async {
+            self.delegate?.navigator(self, didFailToLoadResourceAt: href, withError: error)
+        }
     }
 }
 

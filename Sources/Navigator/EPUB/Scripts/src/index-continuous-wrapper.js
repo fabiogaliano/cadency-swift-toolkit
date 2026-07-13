@@ -1118,8 +1118,13 @@ function setCSSProperties(properties) {
     }
   });
 
-  // Store for new iframes
-  window._cssProperties = properties;
+  // Store the complete latest state for chapters mounted or remounted later.
+  // View-model updates are deltas, so replacing this object would lose earlier
+  // preferences after the sliding window unloads a chapter.
+  window._cssProperties = {
+    ...(window._cssProperties || {}),
+    ...properties,
+  };
 }
 
 // ============================================================================
