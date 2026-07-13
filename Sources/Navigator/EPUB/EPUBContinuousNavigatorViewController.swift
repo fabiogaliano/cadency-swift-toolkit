@@ -23,6 +23,11 @@ import WebKit
 
     /// Called to customize WebView user scripts.
     func navigator(_ navigator: EPUBContinuousNavigatorViewController, setupUserScripts userContentController: WKUserContentController)
+
+    /// Called when the user double-taps a semantic block (paragraph, heading, list item, …)
+    /// in a chapter iframe. The event carries only a `Locator`, a viewport rectangle, and an
+    /// optional transient block key — never DOM nodes, ranges, or other Readium internals.
+    func navigator(_ navigator: EPUBContinuousNavigatorViewController, didActivateBlock event: EPUBContinuousNavigatorViewController.BlockActivationEvent)
 }
 
 public extension EPUBContinuousNavigatorDelegate {
@@ -40,6 +45,8 @@ public extension EPUBContinuousNavigatorDelegate {
     func navigator(_ navigator: EPUBContinuousNavigatorViewController, viewportDidChange viewport: EPUBContinuousNavigatorViewController.Viewport?) {}
 
     func navigator(_ navigator: EPUBContinuousNavigatorViewController, setupUserScripts userContentController: WKUserContentController) {}
+
+    func navigator(_ navigator: EPUBContinuousNavigatorViewController, didActivateBlock event: EPUBContinuousNavigatorViewController.BlockActivationEvent) {}
 }
 
 /// A navigator for reflowable EPUB publications using continuous vertical scrolling.
@@ -166,6 +173,27 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         public var progressions: [AnyURL: ClosedRange<Double>]
         /// Range of visible positions.
         public var positions: ClosedRange<Int>?
+    }
+
+    /// A validated double-tap block activation, carried from chapter iframe JavaScript through
+    /// this navigator to the delegate. Positional identity only — never a durable block ID.
+    public struct BlockActivationEvent: Equatable {
+        /// Locator for the activated block, anchored by `locations.cssSelector` with
+        /// `text.highlight`/`before`/`after` set for `TextQuoteAnchor` resolution.
+        public var locator: Locator
+
+        /// The block's range rectangle in top-level WKWebView viewport coordinates.
+        public var rect: CGRect
+
+        /// Transient identity for toggling the same block on/off, derived by the JS layer from
+        /// at least the chapter href and CSS selector. Not a persisted identifier.
+        public var blockKey: String?
+
+        public init(locator: Locator, rect: CGRect, blockKey: String?) {
+            self.locator = locator
+            self.rect = rect
+            self.blockKey = blockKey
+        }
     }
 
     // MARK: - Private Properties
@@ -462,6 +490,12 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         registerJSMessage(named: "tap") { [weak self] in self?.didTap($0) }
         registerJSMessage(named: "pointerEventReceived") { [weak self] in self?.didReceivePointerEvent($0) }
         registerJSMessage(named: "keyEventReceived") { [weak self] in self?.didReceiveKeyEvent($0) }
+        // Registered only to keep enable/disable symmetric with every other message name; this
+        // closure is intentionally never invoked. `didReceive` below unconditionally intercepts
+        // "blockActivated" and returns, since forwarding to this dictionary-backed closure would
+        // lose `frameInfo`, which the origin check needs — unlike `spreadLoaded`, which filters
+        // conditionally and still falls through to invoke its registered closure.
+        registerJSMessage(named: "blockActivated") { [weak self] in self?.didReceiveBlockActivated($0, frameInfo: nil) }
 
         for (name, _) in jsMessages {
             webView.configuration.userContentController.add(self, name: name)
@@ -671,6 +705,104 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         Task {
             _ = await inputObservers.didReceive(keyEvent)
         }
+    }
+
+    /// Strictly validates a `blockActivated` message and forwards it to the delegate.
+    ///
+    /// Rejects (log-and-drop) rather than substituting empty strings or zero rectangles: a
+    /// malformed message must never surface as a degraded-but-present block activation, because
+    /// downstream React state would then persist a bogus highlight.
+    private func didReceiveBlockActivated(_ body: Any, frameInfo: WKFrameInfo?) {
+        guard let data = body as? [String: Any] else {
+            log(.warning, "blockActivated: payload is not a dictionary")
+            return
+        }
+
+        guard let locator = try? Locator(json: data["locator"]), !locator.href.string.isEmpty else {
+            log(.warning, "blockActivated: could not parse a valid locator")
+            return
+        }
+
+        guard let spineIndex = readingOrder.firstIndexWithHREF(locator.href) else {
+            log(.warning, "blockActivated: locator href is not in the publication reading order: \(locator.href)")
+            return
+        }
+
+        guard MediaType.xhtml.matches(locator.mediaType) else {
+            log(.warning, "blockActivated: locator type is not XHTML: \(locator.mediaType)")
+            return
+        }
+
+        guard
+            let cssSelector = locator.locations.cssSelector,
+            !cssSelector.isEmpty
+        else {
+            log(.warning, "blockActivated: missing or empty locations.cssSelector")
+            return
+        }
+
+        guard
+            let highlight = locator.text.highlight,
+            !highlight.isEmpty
+        else {
+            log(.warning, "blockActivated: missing or empty text.highlight")
+            return
+        }
+
+        guard let rect = Self.parseBlockActivationRect(data["rect"]) else {
+            log(.warning, "blockActivated: rect is missing, non-finite, or non-positive")
+            return
+        }
+
+        // `WKScriptMessage.body` bridges JS `null` to `NSNull`, so an explicit `blockKey: null`
+        // arrives as `.some(NSNull())` rather than `.none`; treat it the same as an absent key.
+        let blockKey: String?
+        switch data["blockKey"] {
+        case .none:
+            blockKey = nil
+        case .some(let rawValue) where rawValue is NSNull:
+            blockKey = nil
+        case let .some(rawValue):
+            guard let key = rawValue as? String, !key.isEmpty else {
+                log(.warning, "blockActivated: blockKey must be a non-empty string when present")
+                return
+            }
+            blockKey = key
+        }
+
+        // Best-effort origin check: confirm the claimed href actually matches the chapter iframe
+        // that sent the message, rather than trusting arbitrary WK message content. Skipped (not
+        // rejected) when WebKit doesn't surface a frame URL, since that's a WebKit-side
+        // limitation rather than evidence of a malformed message.
+        if let frameURL = frameInfo?.request.url {
+            let expectedURL = viewModel.url(to: readingOrder[spineIndex])
+            guard AnyURL(url: frameURL).isEquivalentTo(expectedURL) else {
+                log(.warning, "blockActivated: sending frame \(frameURL) does not match claimed href \(locator.href)")
+                return
+            }
+        }
+
+        delegate?.navigator(self, didActivateBlock: BlockActivationEvent(locator: locator, rect: rect, blockKey: blockKey))
+    }
+
+    /// Strictly parses the `rect` field of a `blockActivated` message.
+    ///
+    /// Named and implemented separately from `CGRect(json:)` because that helper reads
+    /// `left`/`top` keys and defaults missing values to zero for decoration/selection geometry.
+    /// The block-activation rect contract (`x`/`y`/`width`/`height`, all finite, width/height
+    /// positive) is a different coordinate/validation contract and must reject rather than
+    /// default.
+    private static func parseBlockActivationRect(_ json: Any?) -> CGRect? {
+        guard
+            let dict = json as? [String: Any],
+            let x = dict["x"] as? Double, x.isFinite,
+            let y = dict["y"] as? Double, y.isFinite,
+            let width = dict["width"] as? Double, width.isFinite, width > 0,
+            let height = dict["height"] as? Double, height.isFinite, height > 0
+        else {
+            return nil
+        }
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     // MARK: - Location Updates
@@ -952,6 +1084,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 extension EPUBContinuousNavigatorViewController: WKScriptMessageHandler {
     public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "spreadLoaded", !message.frameInfo.isMainFrame {
+            return
+        }
+        if message.name == "blockActivated" {
+            didReceiveBlockActivated(message.body, frameInfo: message.frameInfo)
             return
         }
         guard let handler = jsMessages[message.name] else { return }
