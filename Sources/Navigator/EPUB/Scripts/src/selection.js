@@ -108,7 +108,7 @@ function createOrderedRange(startNode, startOffset, endNode, endOffset) {
   rangeReverse.setEnd(startNode, startOffset);
   if (!rangeReverse.collapsed) {
     log(">>> createOrderedRange RANGE REVERSE OK.");
-    return range;
+    return rangeReverse;
   }
   log(">>> createOrderedRange RANGE REVERSE ALSO COLLAPSED?!");
   return undefined;

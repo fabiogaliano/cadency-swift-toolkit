@@ -645,9 +645,19 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
         let frame = CGRect(json: selection["rect"]) ?? .zero
 
-        if let location = currentLocation {
+        // `selection` is already shaped like a Locator JSON object (href, type,
+        // locations.cssSelector anchored to the range's containing element), so
+        // parsing it directly anchors the resulting Locator to the selection
+        // itself and lets it resolve through `rangeFromLocator` on its own -
+        // instead of inheriting `currentLocation` (the reading position), which
+        // may be a different, non-containing element. Fall back to the old
+        // currentLocation-based Locator when the parse fails (e.g. a malformed
+        // href, or the script omitting `locations` when no selector resolved).
+        let locator = (try? Locator(json: selection)) ?? currentLocation?.copy(text: { $0 = text })
+
+        if let locator = locator {
             viewModel.editingActions.selection = Selection(
-                locator: location.copy(text: { $0 = text }),
+                locator: locator,
                 frame: frame
             )
         }
