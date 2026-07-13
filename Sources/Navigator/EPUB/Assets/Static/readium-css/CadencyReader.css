@@ -1,0 +1,193 @@
+/* Cadency normalized reading style.
+   Loaded after ReadiumCSS-after.css from the common readium-css base URL, so it applies
+   identically under the default/rtl/cjk-horizontal/cjk-vertical stylesheet folders. Every
+   rule below is scoped to Readium's a11y-normalization root flag (readium-a11y-on), which
+   ReadiumCSS.swift sets whenever EPUBSettings.textNormalization is true. When normalization
+   is off, none of this fires and publisher styling is left untouched.
+   Logical properties (inline/block, start/end) are used throughout instead of left/right/
+   top/bottom so RTL and CJK vertical writing-mode keep working without per-layout variants. */
+
+:root[style*="readium-a11y-on"] {
+  --cadency-flow-space: calc(var(--USER__paraSpacing, 1rem) * 1.5);
+  /* currentColor-relative so muted text and hairlines track whichever theme (light/sepia/
+     night) is active instead of only working for the light palette declared below. */
+  --cadency-muted: color-mix(in srgb, currentColor 60%, transparent);
+  --cadency-border: color-mix(in srgb, currentColor 25%, transparent);
+}
+
+/* Light-theme palette. Guarded away from readium-night-on/readium-sepia-on so it never
+   fights the existing dark/sepia color mechanism in ReadiumCSS-after.css. */
+:root[style*="readium-a11y-on"]:not([style*="readium-night-on"]):not([style*="readium-sepia-on"]) {
+  --RS__backgroundColor: #fbf9f4;
+  --RS__textColor: #1e1b16;
+  --RS__linkColor: #1d5b9e;
+  --RS__visitedColor: #6b4a96;
+}
+
+/* ReadiumCSS-after.css only recolors links unconditionally inside night/sepia; for the
+   default appearance it relies on ReadiumCSS-default.css, which is skipped whenever the
+   publisher supplies its own stylesheet. Re-assert it here so normalized light mode also
+   gets Cadency's link color on styled publications. */
+:root[style*="readium-a11y-on"]:not([style*="readium-night-on"]):not([style*="readium-sepia-on"]) a:link,
+:root[style*="readium-a11y-on"]:not([style*="readium-night-on"]):not([style*="readium-sepia-on"]) a:link * {
+  color: var(--RS__linkColor) !important;
+}
+
+:root[style*="readium-a11y-on"]:not([style*="readium-night-on"]):not([style*="readium-sepia-on"]) a:visited,
+:root[style*="readium-a11y-on"]:not([style*="readium-night-on"]):not([style*="readium-sepia-on"]) a:visited * {
+  color: var(--RS__visitedColor) !important;
+}
+
+/* Serif body typography, deferring to the per-language --RS__baseFontFamily stacks that
+   ReadiumCSS-before.css already resolves via :lang() (CJK, RTL scripts, etc. get their own
+   safe fallbacks there) rather than forcing one Latin serif stack over every language. */
+:root[style*="readium-font-on"][style*="readium-a11y-on"] {
+  font-family: var(--RS__baseFontFamily) !important;
+}
+
+/* Readable centered measure and responsive horizontal margins already come from Readium's
+   unconditional pagination module (body max-width: var(--RS__maxLineLength), padding: var(
+   --RS__pageGutter), both already responsive by breakpoint). Re-declaring them here would
+   mean re-fighting paged-mode column specificity wars for no behavior change, since the
+   continuous navigator always forces scroll mode. Left alone intentionally. */
+
+:root[style*="readium-a11y-on"] h1,
+:root[style*="readium-a11y-on"] h2,
+:root[style*="readium-a11y-on"] h3,
+:root[style*="readium-a11y-on"] h4,
+:root[style*="readium-a11y-on"] h5,
+:root[style*="readium-a11y-on"] h6 {
+  margin-block: 1.8em 0.7em !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+  font-variant: normal !important;
+  text-transform: none !important;
+}
+
+:root[style*="readium-a11y-on"] ul,
+:root[style*="readium-a11y-on"] ol {
+  margin-block: var(--cadency-flow-space) !important;
+  padding-inline-start: 1.4em !important;
+}
+
+:root[style*="readium-a11y-on"] li {
+  margin-block-end: calc(var(--USER__paraSpacing, 1rem) / 2) !important;
+}
+
+:root[style*="readium-a11y-on"] li > ul,
+:root[style*="readium-a11y-on"] li > ol {
+  margin-block: 0.4em !important;
+}
+
+:root[style*="readium-a11y-on"] blockquote {
+  margin-block: var(--cadency-flow-space) !important;
+  margin-inline: 0 !important;
+  padding-inline-start: 1em !important;
+  border-inline-start: 3px solid var(--cadency-border) !important;
+  color: var(--cadency-muted) !important;
+}
+
+/* Higher specificity than ReadiumCSS-after.css's own paragraph-spacing rule (root + 2
+   attribute selectors there too), which otherwise wins the tie against a plain "blockquote
+   p" selector and keeps the full paragraph rhythm inside blockquotes. */
+:root[style*="readium-advanced-on"][style*="readium-a11y-on"] blockquote p {
+  margin-block: 0.4em !important;
+}
+
+:root[style*="readium-a11y-on"] dl {
+  margin-block: var(--cadency-flow-space) !important;
+}
+
+:root[style*="readium-a11y-on"] dt {
+  font-weight: 700 !important;
+  margin-block-start: 0.8em !important;
+}
+
+:root[style*="readium-a11y-on"] dd {
+  margin-inline-start: 1.2em !important;
+  margin-block-end: 0.4em !important;
+}
+
+:root[style*="readium-a11y-on"] figure {
+  margin-block: var(--cadency-flow-space) !important;
+  margin-inline: 0 !important;
+  text-align: center !important;
+}
+
+:root[style*="readium-a11y-on"] figcaption {
+  margin-block-start: 0.5em !important;
+  font-size: 0.875rem !important;
+  color: var(--cadency-muted) !important;
+  text-align: start !important;
+}
+
+/* Sizing only (no forced aspect changes), and math/MathML is never targeted here, so
+   MathML layout and intrinsic SVG/image sizing used by publishers stay intact. */
+:root[style*="readium-a11y-on"] img,
+:root[style*="readium-a11y-on"] video,
+:root[style*="readium-a11y-on"] svg {
+  max-inline-size: 100% !important;
+  block-size: auto !important;
+}
+
+/* Tables keep their table layout (no display:block reflow hack, which drops row/column
+   structure); overflow-x alone is enough to let a wide table scroll within the measure
+   instead of being clipped or blowing out the page. */
+:root[style*="readium-a11y-on"] table {
+  max-inline-size: 100% !important;
+  overflow-x: auto !important;
+  border-collapse: collapse !important;
+  margin-block: var(--cadency-flow-space) !important;
+}
+
+:root[style*="readium-a11y-on"] th,
+:root[style*="readium-a11y-on"] td {
+  padding: 0.35em 0.6em !important;
+  border: 1px solid var(--cadency-border) !important;
+}
+
+/* The a11y font-normalization block in ReadiumCSS-after.css forces font-family: inherit
+   on every descendant except code/var/kbd/samp — pre is not in that exclusion list, so
+   without this, code blocks would inherit the normalized serif body font. The extra
+   :not(script):not(style):not(template):not(br) chains are inert (none of these elements
+   ever match pre/code/kbd/samp/var); they only exist to raise this selector's specificity
+   above that upstream rule's, since matching importance ties resolve by specificity, not
+   source order. */
+:root[style*="readium-font-on"][style*="readium-a11y-on"] pre:not(script):not(style):not(template):not(br),
+:root[style*="readium-font-on"][style*="readium-a11y-on"] code:not(script):not(style):not(template):not(br),
+:root[style*="readium-font-on"][style*="readium-a11y-on"] kbd:not(script):not(style):not(template):not(br),
+:root[style*="readium-font-on"][style*="readium-a11y-on"] samp:not(script):not(style):not(template):not(br),
+:root[style*="readium-font-on"][style*="readium-a11y-on"] var:not(script):not(style):not(template):not(br) {
+  font-family: var(--RS__monospaceTf) !important;
+}
+
+:root[style*="readium-a11y-on"] pre {
+  margin-block: var(--cadency-flow-space) !important;
+  max-inline-size: 100% !important;
+  overflow-x: auto !important;
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+}
+
+:root[style*="readium-a11y-on"] code {
+  overflow-wrap: normal !important;
+}
+
+/* Guards against malformed publisher content (unbroken URLs, run-on tokens) blowing out
+   the measure. Table/pre/code are excluded on purpose — they get horizontal scroll above
+   instead, so structured/preformatted content isn't force-wrapped mid-token. */
+:root[style*="readium-a11y-on"] p,
+:root[style*="readium-a11y-on"] li,
+:root[style*="readium-a11y-on"] blockquote,
+:root[style*="readium-a11y-on"] dt,
+:root[style*="readium-a11y-on"] dd,
+:root[style*="readium-a11y-on"] figcaption,
+:root[style*="readium-a11y-on"] h1,
+:root[style*="readium-a11y-on"] h2,
+:root[style*="readium-a11y-on"] h3,
+:root[style*="readium-a11y-on"] h4,
+:root[style*="readium-a11y-on"] h5,
+:root[style*="readium-a11y-on"] h6 {
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}

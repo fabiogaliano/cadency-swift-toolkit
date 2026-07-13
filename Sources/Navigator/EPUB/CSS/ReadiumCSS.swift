@@ -126,6 +126,11 @@ extension ReadiumCSS: HTMLInjectable {
         }
         inj.append(.stylesheetLink(href: stylesheetsFolder.appendingPath("ReadiumCSS-after.css", isDirectory: false).string))
 
+        // Cadency's normalized reading style. Resolved from `baseURL` rather than
+        // `stylesheetsFolder`, so it loads from the same place under every layout
+        // (default/rtl/cjk-horizontal/cjk-vertical) instead of only the default folder.
+        inj.append(.stylesheetLink(href: baseURL.appendingPath("CadencyReader.css", isDirectory: false).string))
+
         // Fix Readium CSS issue with the positioning of <audio> elements.
         // https://github.com/readium/readium-css/issues/94
         // https://github.com/readium/r2-navigator-kotlin/issues/193
