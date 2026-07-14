@@ -275,5 +275,54 @@
       }, { once: true });
       applyStoredToIframe(iframe);
     });
+
+    // --- temporary open-latency trace (spike) ---
+    function postTrace(mark) {
+      try {
+        window.webkit.messageHandlers.openTrace.postMessage("mark=" + mark + " t=" + Date.now());
+      } catch (e) { }
+    }
+    postTrace("wrapperScriptRun");
+
+    var origInitialize = cw.initialize;
+    cw.initialize = function () {
+      postTrace("spineInitJSStart");
+      var result = origInitialize.apply(cw, arguments);
+      postTrace("spineInitJSDone");
+      return result;
+    };
+
+    var firstPaintPosted = false;
+    function watchForFirstPaint(iframe) {
+      iframe.addEventListener('load', function () {
+        if (firstPaintPosted) return;
+        var rect = iframe.getBoundingClientRect();
+        if (rect.bottom <= 0 || rect.top >= window.innerHeight) return;
+        // Second rAF fires only after a frame containing the loaded chapter
+        // has been committed — the closest in-page proxy for first readable paint.
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (firstPaintPosted) return;
+            firstPaintPosted = true;
+            postTrace("firstVisibleIframePainted");
+          });
+        });
+      }, { once: true });
+    }
+    new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var added = mutations[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          var node = added[j];
+          if (!node || firstPaintPosted) continue;
+          if (node.matches && node.matches('iframe.chapter-iframe')) {
+            watchForFirstPaint(node);
+          } else if (node.querySelectorAll) {
+            var frames = node.querySelectorAll('iframe.chapter-iframe');
+            for (var k = 0; k < frames.length; k++) watchForFirstPaint(frames[k]);
+          }
+        }
+      }
+    }).observe(document.documentElement, { subtree: true, childList: true });
   } catch (e) { }
 })();
