@@ -33,19 +33,19 @@ export function toNativeRect(rect) {
  * two coordinate spaces are not interchangeable, and reusing `toNativeRect`
  * here would silently corrupt the rect for continuous-scroll content.
  */
-export function toTopViewportRect(rect) {
+export function toTopViewportRect(iframeLocalRect) {
   if (!frameElement) {
-    return rect;
+    return iframeLocalRect;
   }
-  const frameRect = frameElement.getBoundingClientRect();
-  if (!frameRect) {
-    return rect;
+  const frameClientRect = frameElement.getBoundingClientRect();
+  if (!frameClientRect) {
+    return iframeLocalRect;
   }
   return {
-    x: rect.x + frameRect.x,
-    y: rect.y + frameRect.y,
-    width: rect.width,
-    height: rect.height,
+    x: iframeLocalRect.x + frameClientRect.x,
+    y: iframeLocalRect.y + frameClientRect.y,
+    width: iframeLocalRect.width,
+    height: iframeLocalRect.height,
   };
 }
 

@@ -8,14 +8,15 @@
    Logical properties (inline/block, start/end) are used throughout instead of left/right/
    top/bottom so RTL and CJK vertical writing-mode keep working without per-layout variants. */
 
-/* Deliberately ungated: touch-action: manipulation removes WebKit's double-tap click
-   delay for every reflowable book, normalized or not. It does NOT stop the double-tap
-   pan-to-center: with zoom pinned, WKContentView's non-blocking double-tap recognizer
-   triggers smart magnification whenever the tap isn't handled as a click, and that path
-   never consults touch-action. The pan is suppressed natively instead
-   (EPUBContinuousNavigatorViewController, webKitDoubleTapZoomEnabled). */
-html {
-  touch-action: manipulation;
+/* Deliberately ungated gesture plumbing. Applying manipulation to every authored
+   descendant makes WebKit's public hit-testing path disable smart magnification at the
+   actual tap target, even when publisher CSS sets touch-action on an intermediate node.
+   Pan and pinch remain available; gesture arbitration separately excludes interactive
+   content and mouse/trackpad clicks. */
+html,
+body,
+body * {
+  touch-action: manipulation !important;
 }
 
 :root[style*="readium-a11y-on"] {

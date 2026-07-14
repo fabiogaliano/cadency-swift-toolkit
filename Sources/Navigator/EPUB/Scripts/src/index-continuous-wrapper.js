@@ -369,6 +369,37 @@ function getIframeReadium(iframe) {
   return win?.readium;
 }
 
+// Takes top-viewport (wrapper client) coordinates and translates them to the
+// chapter iframe's local client space. The reverse transform on the way out
+// (the iframe's `toTopViewportRect` on the activation rect) uses its own
+// getBoundingClientRect read; the two reads only agree because the whole call
+// runs in one synchronous JS turn - never make this seam async. Returns a
+// diagnostic string so native can tell an activation apart from the distinct
+// miss modes when reading onDiagnostics on device.
+function activateBlockAtPoint(topViewportX, topViewportY) {
+  if (!Number.isFinite(topViewportX) || !Number.isFinite(topViewportY)) {
+    return "bad-point";
+  }
+
+  const target = document.elementFromPoint(topViewportX, topViewportY);
+  const iframe =
+    target instanceof HTMLIFrameElement &&
+    target.classList.contains("chapter-iframe")
+      ? target
+      : null;
+  const readium = getIframeReadium(iframe);
+  if (!iframe || !readium?.activateBlockAtLocalPoint) {
+    return "no-chapter-at-point";
+  }
+
+  const iframeClientRect = iframe.getBoundingClientRect();
+  const result = readium.activateBlockAtLocalPoint(
+    topViewportX - iframeClientRect.left,
+    topViewportY - iframeClientRect.top
+  );
+  return typeof result === "string" ? result : "none";
+}
+
 function getIframeScrollHeight(iframe) {
   const doc = iframe?.contentDocument;
   if (!doc) return null;
@@ -1241,8 +1272,9 @@ global.continuousWrapper = {
   scrollForward: scrollForward,
   scrollBackward: scrollBackward,
 
-  // Location
+  // Location and interaction
   findFirstVisibleLocator: findFirstVisibleLocator,
+  activateBlockAtPoint: activateBlockAtPoint,
 
   // Decorations
   applyDecorations: applyDecorations,

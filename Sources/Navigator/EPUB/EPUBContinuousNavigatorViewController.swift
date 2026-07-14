@@ -114,15 +114,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         /// Logs state changes when true.
         public var debugState: Bool
 
-        /// Re-enables WebKit's built-in double-tap smart-magnification behavior.
-        ///
-        /// With the wrapper's zoom pinned (`user-scalable=no`), that behavior cannot zoom,
-        /// so WebKit instead pans the double-tapped block toward screen center (its
-        /// documented "user probably intended to scroll" fallback). The navigator reserves
-        /// double-tap for block activation, so this is suppressed by default. Opt in only
-        /// if a reading preset wants the native pan-to-block gesture instead.
-        public var webKitDoubleTapZoomEnabled: Bool
-
         public init(
             preferences: EPUBPreferences = .empty,
             defaults: EPUBDefaults = EPUBDefaults(),
@@ -134,8 +125,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             decorationTemplates: [Decoration.Style.Id: HTMLDecorationTemplate] = HTMLDecorationTemplate.defaultTemplates(),
             fontFamilyDeclarations: [AnyHTMLFontFamilyDeclaration] = [],
             readiumCSSRSProperties: CSSRSProperties = CSSRSProperties(),
-            debugState: Bool = false,
-            webKitDoubleTapZoomEnabled: Bool = false
+            debugState: Bool = false
         ) {
             self.preferences = preferences
             self.defaults = defaults
@@ -148,7 +138,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             self.fontFamilyDeclarations = fontFamilyDeclarations
             self.readiumCSSRSProperties = readiumCSSRSProperties
             self.debugState = debugState
-            self.webKitDoubleTapZoomEnabled = webKitDoubleTapZoomEnabled
         }
     }
 
@@ -218,9 +207,28 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private var webView: WKWebView!
     private var isWrapperLoaded = false
 
+    private lazy var blockDoubleTapRecognizer: UITapGestureRecognizer = {
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(didRecognizeBlockDoubleTap(_:)))
+        recognizer.numberOfTapsRequired = 2
+        recognizer.numberOfTouchesRequired = 1
+        recognizer.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue),
+        ]
+        recognizer.delegate = self
+        return recognizer
+    }()
+
     #if DEBUG
         public var diagnosticHandler: ((String) -> Void)?
     #endif
+
+    // temporary open-latency trace (spike)
+    private func traceMark(_ name: String) {
+        #if DEBUG
+            diagnosticHandler?("[open-trace] mark=\(name) t=\(Int64(Date().timeIntervalSince1970 * 1000))")
+        #endif
+    }
 
     /// Navigation state.
     private enum State: Equatable {
@@ -415,12 +423,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         #endif
 
         view.addSubview(webView)
-
-        // WKContentView's gesture recognizers are installed by the time the next runloop
-        // turn executes; scanning synchronously here would miss them.
-        DispatchQueue.main.async { [weak self] in
-            self?.suppressWebKitDoubleTapPan()
-        }
+        webView.addGestureRecognizer(blockDoubleTapRecognizer)
 
         enableJSMessages()
 
@@ -439,80 +442,28 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         delegate?.navigator(self, setupUserScripts: webView.configuration.userContentController)
     }
 
-    // MARK: - WebKit Double-Tap Suppression
+    @objc private func didRecognizeBlockDoubleTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        // Web-view coordinates are the wrapper document's top-viewport coordinates: the wrapper
+        // fills the web view and never scrolls its own viewport (chapters scroll inside it).
+        let topViewportPoint = recognizer.location(in: webView)
+        guard topViewportPoint.x.isFinite, topViewportPoint.y.isFinite else { return }
 
-    /// KVO pins keeping WebKit's smart-magnification double-tap recognizers disabled,
-    /// keyed by recognizer identity. WebKit re-evaluates their enablement on every
-    /// viewport/layer-tree update, so a one-shot disable does not hold.
-    private var suppressedDoubleTapObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
-
-    /// Action selectors of the two WKContentView recognizers feeding
-    /// `SmartMagnificationController`. With the wrapper's zoom pinned, the "non-blocking"
-    /// one is the live path: it flags a pending double tap, and when the web process
-    /// reports the tap was not handled as a click (plain reader text never is), WebKit
-    /// runs the smart-magnification gesture anyway — which, unable to change scale, pans
-    /// the tapped block toward screen center. Double-tap is reserved for block activation
-    /// here, so both entry points are suppressed. `_doubleTapRecognizedForDoubleClick:`
-    /// (dblclick synthesis) is deliberately left alone.
-    private static let smartMagnificationDoubleTapActions = [
-        "_doubleTapRecognized:",
-        "_nonBlockingDoubleTapRecognized:",
-    ]
-
-    private func suppressWebKitDoubleTapPan() {
-        guard !config.webKitDoubleTapZoomEnabled else { return }
-        suppressWebKitDoubleTapPan(in: webView.scrollView)
-    }
-
-    private func suppressWebKitDoubleTapPan(in view: UIView) {
-        for recognizer in view.gestureRecognizers ?? [] {
-            guard
-                let tap = recognizer as? UITapGestureRecognizer,
-                tap.numberOfTapsRequired == 2,
-                tap.numberOfTouchesRequired == 1,
-                suppressedDoubleTapObservations[ObjectIdentifier(tap)] == nil
-            else { continue }
-
-            let actions = Self.recognizerActionsDescription(tap)
-            // If introspection is ever unavailable (UIKit layout change), suppress every
-            // single-touch double-tap recognizer instead: losing dblclick synthesis is
-            // acceptable, the pan is not.
-            let feedsSmartMagnification = actions == "unavailable"
-                || Self.smartMagnificationDoubleTapActions.contains { actions.contains($0) }
-            guard feedsSmartMagnification else { continue }
-
-            tap.isEnabled = false
-            suppressedDoubleTapObservations[ObjectIdentifier(tap)] = tap.observe(
-                \.isEnabled, options: [.new]
-            ) { recognizer, change in
-                if change.newValue == true {
-                    recognizer.isEnabled = false
-                }
+        webView.evaluateJavaScript(
+            "continuousWrapper.activateBlockAtPoint(\(topViewportPoint.x), \(topViewportPoint.y));"
+        ) { [weak self] result, error in
+            if let error {
+                self?.log(.error, DebugError("Failed to activate the double-tapped block.", cause: error))
+                return
             }
-
             #if DEBUG
-                diagnosticHandler?(
-                    "suppressed-webkit-double-tap id=\(ObjectIdentifier(tap)) type=\(String(describing: type(of: tap))) actions=\(actions)"
+                // result: "posted" (block activated) or a miss mode
+                // ("none"/"no-chapter-at-point"/"bad-point").
+                self?.diagnosticHandler?(
+                    "block-double-tap point=(\(topViewportPoint.x), \(topViewportPoint.y)) result=\(result as? String ?? "unknown")"
                 )
             #endif
         }
-        for subview in view.subviews {
-            suppressWebKitDoubleTapPan(in: subview)
-        }
-    }
-
-    /// Introspects a recognizer's target/action pairs via the private `_targets` ivar;
-    /// each entry renders like `(action=_doubleTapRecognized:, target=<WKContentView …>)`.
-    /// Guarded by an ivar-existence check so a UIKit layout change degrades to
-    /// "unavailable" instead of an unhandled KVC exception.
-    private static func recognizerActionsDescription(_ recognizer: UIGestureRecognizer) -> String {
-        guard class_getInstanceVariable(UIGestureRecognizer.self, "_targets") != nil,
-              let targets = recognizer.value(forKey: "targets") as? [AnyObject],
-              !targets.isEmpty
-        else {
-            return "unavailable"
-        }
-        return targets.map { String(describing: $0) }.joined(separator: " ")
     }
 
     private func initialize() async {
@@ -537,6 +488,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
             log(.debug, "Loading continuous wrapper baseURL=\(viewModel.publicationBaseURL.string) assetsURL=\(viewModel.assetsURL.string)")
 
+            traceMark("wrapperLoadStart")
             webView.loadHTMLString(html, baseURL: viewModel.publicationBaseURL.url)
 
             _ = on(.load(currentLocation))
@@ -567,7 +519,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     // MARK: - JavaScript Communication
 
-    private var jsMessages: [String: (Any) -> Void] = [:]
+    private var jsMessages: [String: (Any, WKFrameInfo) -> Void] = [:]
     private var jsMessagesEnabled = false
 
     private var pendingLocationUpdateTask: Task<Void, Never>?
@@ -576,23 +528,31 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         guard !jsMessagesEnabled else { return }
         jsMessagesEnabled = true
 
-        registerJSMessage(named: "log") { [weak self] in self?.didLog($0) }
-        registerJSMessage(named: "logError") { [weak self] in self?.didLogError($0) }
-        registerJSMessage(named: "spreadLoadStarted") { _ in }
-        registerJSMessage(named: "spreadLoaded") { [weak self] _ in self?.initialChaptersDidLoad() }
-        registerJSMessage(named: "progressionChanged") { [weak self] in self?.progressionDidChange($0) }
-        registerJSMessage(named: "chapterMounted") { [weak self] in self?.chapterDidMount($0) }
-        registerJSMessage(named: "selectionChanged") { [weak self] in self?.selectionDidChange($0) }
-        registerJSMessage(named: "decorationActivated") { [weak self] in self?.decorationDidActivate($0) }
-        registerJSMessage(named: "tap") { [weak self] in self?.didTap($0) }
-        registerJSMessage(named: "pointerEventReceived") { [weak self] in self?.didReceivePointerEvent($0) }
-        registerJSMessage(named: "keyEventReceived") { [weak self] in self?.didReceiveKeyEvent($0) }
-        // Registered only to keep enable/disable symmetric with every other message name; this
-        // closure is intentionally never invoked. `didReceive` below unconditionally intercepts
-        // "blockActivated" and returns, since forwarding to this dictionary-backed closure would
-        // lose `frameInfo`, which the origin check needs — unlike `spreadLoaded`, which filters
-        // conditionally and still falls through to invoke its registered closure.
-        registerJSMessage(named: "blockActivated") { [weak self] in self?.didReceiveBlockActivated($0, frameInfo: nil) }
+        registerJSMessage(named: "log") { [weak self] body, _ in self?.didLog(body) }
+        registerJSMessage(named: "logError") { [weak self] body, _ in self?.didLogError(body) }
+        registerJSMessage(named: "spreadLoadStarted") { _, _ in }
+        registerJSMessage(named: "spreadLoaded") { [weak self] _, frameInfo in
+            // Chapter iframes bundle the same scripts as the wrapper; only the wrapper's own
+            // spread-loaded signal marks the initial load.
+            guard frameInfo.isMainFrame else { return }
+            self?.initialChaptersDidLoad()
+        }
+        registerJSMessage(named: "progressionChanged") { [weak self] body, _ in self?.progressionDidChange(body) }
+        registerJSMessage(named: "chapterMounted") { [weak self] body, _ in self?.chapterDidMount(body) }
+        registerJSMessage(named: "selectionChanged") { [weak self] body, _ in self?.selectionDidChange(body) }
+        registerJSMessage(named: "decorationActivated") { [weak self] body, _ in self?.decorationDidActivate(body) }
+        registerJSMessage(named: "tap") { [weak self] body, _ in self?.didTap(body) }
+        registerJSMessage(named: "pointerEventReceived") { [weak self] body, _ in self?.didReceivePointerEvent(body) }
+        registerJSMessage(named: "keyEventReceived") { [weak self] body, _ in self?.didReceiveKeyEvent(body) }
+        registerJSMessage(named: "blockActivated") { [weak self] body, frameInfo in
+            self?.didReceiveBlockActivated(body, frameInfo: frameInfo)
+        }
+        // temporary open-latency trace (spike): wrapper JS posts timestamped marks here
+        registerJSMessage(named: "openTrace") { [weak self] body, _ in
+            #if DEBUG
+                self?.diagnosticHandler?("[open-trace] \(body as? String ?? "")")
+            #endif
+        }
 
         for (name, _) in jsMessages {
             webView.configuration.userContentController.add(self, name: name)
@@ -607,7 +567,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
     }
 
-    private func registerJSMessage(named name: String, handler: @escaping (Any) -> Void) {
+    private func registerJSMessage(named name: String, handler: @escaping (Any, WKFrameInfo) -> Void) {
         jsMessages[name] = handler
     }
 
@@ -650,6 +610,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private func wrapperDidLoad() {
         guard !isWrapperLoaded else { return }
         isWrapperLoaded = true
+        traceMark("wrapperReady")
 
         Task {
             await initializeWrapper()
@@ -687,7 +648,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             return
         }
 
+        traceMark("spineSerialized")
         await evaluateScript("continuousWrapper.initialize(\(spineJSON), \(configJSON));")
+        traceMark("spineInitEvaluated")
 
         // Register decoration templates
         let templates = self.config.decorationTemplates.reduce(into: [:]) { styles, item in
@@ -820,50 +783,72 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     /// Strictly validates a `blockActivated` message and forwards it to the delegate.
+    private func didReceiveBlockActivated(_ body: Any, frameInfo: WKFrameInfo) {
+        switch Self.parseBlockActivationEvent(
+            body,
+            frameURL: frameInfo.request.url,
+            readingOrder: readingOrder,
+            urlToLink: { [viewModel] in viewModel.url(to: $0) }
+        ) {
+        case let .success(event):
+            delegate?.navigator(self, didActivateBlock: event)
+        case let .failure(rejection):
+            log(.warning, rejection.warning)
+        }
+    }
+
+    /// A `blockActivated` message that failed validation, carrying the warning to log.
+    struct BlockActivationRejection: Swift.Error, Equatable {
+        let warning: String
+    }
+
+    /// Strictly validates a `blockActivated` message body against the publication's reading
+    /// order and the sending frame's URL.
     ///
-    /// Rejects (log-and-drop) rather than substituting empty strings or zero rectangles: a
-    /// malformed message must never surface as a degraded-but-present block activation, because
-    /// downstream React state would then persist a bogus highlight.
-    private func didReceiveBlockActivated(_ body: Any, frameInfo: WKFrameInfo?) {
+    /// Rejects rather than substituting empty strings or zero rectangles: a malformed message
+    /// must never surface as a degraded-but-present block activation, because downstream React
+    /// state would then persist a bogus highlight.
+    ///
+    /// Static and WebKit-free (the frame's URL is passed in, not `WKFrameInfo`) so the whole
+    /// validation chain is testable without constructing a navigator.
+    static func parseBlockActivationEvent(
+        _ body: Any,
+        frameURL: URL?,
+        readingOrder: [Link],
+        urlToLink: (Link) -> AnyURL
+    ) -> Result<BlockActivationEvent, BlockActivationRejection> {
         guard let data = body as? [String: Any] else {
-            log(.warning, "blockActivated: payload is not a dictionary")
-            return
+            return .failure(.init(warning: "blockActivated: payload is not a dictionary"))
         }
 
         guard let locator = try? Locator(json: data["locator"]), !locator.href.string.isEmpty else {
-            log(.warning, "blockActivated: could not parse a valid locator")
-            return
+            return .failure(.init(warning: "blockActivated: could not parse a valid locator"))
         }
 
         guard let spineIndex = readingOrder.firstIndexWithHREF(locator.href) else {
-            log(.warning, "blockActivated: locator href is not in the publication reading order: \(locator.href)")
-            return
+            return .failure(.init(warning: "blockActivated: locator href is not in the publication reading order: \(locator.href)"))
         }
 
         guard MediaType.xhtml.matches(locator.mediaType) else {
-            log(.warning, "blockActivated: locator type is not XHTML: \(locator.mediaType)")
-            return
+            return .failure(.init(warning: "blockActivated: locator type is not XHTML: \(locator.mediaType)"))
         }
 
         guard
             let cssSelector = locator.locations.cssSelector,
             !cssSelector.isEmpty
         else {
-            log(.warning, "blockActivated: missing or empty locations.cssSelector")
-            return
+            return .failure(.init(warning: "blockActivated: missing or empty locations.cssSelector"))
         }
 
         guard
             let highlight = locator.text.highlight,
             !highlight.isEmpty
         else {
-            log(.warning, "blockActivated: missing or empty text.highlight")
-            return
+            return .failure(.init(warning: "blockActivated: missing or empty text.highlight"))
         }
 
-        guard let rect = Self.parseBlockActivationRect(data["rect"]) else {
-            log(.warning, "blockActivated: rect is missing, non-finite, or non-positive")
-            return
+        guard let rect = parseBlockActivationRect(data["rect"]) else {
+            return .failure(.init(warning: "blockActivated: rect is missing, non-finite, or non-positive"))
         }
 
         // `WKScriptMessage.body` bridges JS `null` to `NSNull`, so an explicit `blockKey: null`
@@ -876,8 +861,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             blockKey = nil
         case let .some(rawValue):
             guard let key = rawValue as? String, !key.isEmpty else {
-                log(.warning, "blockActivated: blockKey must be a non-empty string when present")
-                return
+                return .failure(.init(warning: "blockActivated: blockKey must be a non-empty string when present"))
             }
             blockKey = key
         }
@@ -886,15 +870,14 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         // that sent the message, rather than trusting arbitrary WK message content. Skipped (not
         // rejected) when WebKit doesn't surface a frame URL, since that's a WebKit-side
         // limitation rather than evidence of a malformed message.
-        if let frameURL = frameInfo?.request.url {
-            let expectedURL = viewModel.url(to: readingOrder[spineIndex])
+        if let frameURL {
+            let expectedURL = urlToLink(readingOrder[spineIndex])
             guard AnyURL(url: frameURL).isEquivalentTo(expectedURL) else {
-                log(.warning, "blockActivated: sending frame \(frameURL) does not match claimed href \(locator.href)")
-                return
+                return .failure(.init(warning: "blockActivated: sending frame \(frameURL) does not match claimed href \(locator.href)"))
             }
         }
 
-        delegate?.navigator(self, didActivateBlock: BlockActivationEvent(locator: locator, rect: rect, blockKey: blockKey))
+        return .success(BlockActivationEvent(locator: locator, rect: rect, blockKey: blockKey))
     }
 
     /// Strictly parses the `rect` field of a `blockActivated` message.
@@ -1180,15 +1163,30 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
 extension EPUBContinuousNavigatorViewController: WKScriptMessageHandler {
     public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if message.name == "spreadLoaded", !message.frameInfo.isMainFrame {
-            return
+        jsMessages[message.name]?(message.body, message.frameInfo)
+    }
+}
+
+// MARK: - UIGestureRecognizerDelegate
+
+extension EPUBContinuousNavigatorViewController: UIGestureRecognizerDelegate {
+    public func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        guard gestureRecognizer === blockDoubleTapRecognizer,
+              let otherTap = otherGestureRecognizer as? UITapGestureRecognizer,
+              otherTap.numberOfTapsRequired == 2,
+              otherTap.numberOfTouchesRequired == 1,
+              let otherView = otherTap.view
+        else {
+            return false
         }
-        if message.name == "blockActivated" {
-            didReceiveBlockActivated(message.body, frameInfo: message.frameInfo)
-            return
-        }
-        guard let handler = jsMessages[message.name] else { return }
-        handler(message.body)
+
+        // Give Cadency's public touch/Pencil recognizer precedence over competing
+        // double-tap recognizers in the web view hierarchy. Pointer input is excluded
+        // by allowedTouchTypes, preserving mouse/trackpad double-click selection.
+        return otherView === webView || otherView.isDescendant(of: webView)
     }
 }
 
@@ -1205,10 +1203,6 @@ extension EPUBContinuousNavigatorViewController: WKNavigationDelegate {
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         log(.debug, "Wrapper navigation finished")
-
-        // WebKit can recreate its double-tap recognizers across navigations; re-pin any
-        // new instances.
-        suppressWebKitDoubleTapPan()
 
         webView.evaluateJavaScript(
             """

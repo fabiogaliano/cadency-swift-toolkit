@@ -1,0 +1,4 @@
+# Generated webpack bundles (source: Sources/Navigator/EPUB/Scripts/src/).
+# Committed so the Swift package builds without a JS toolchain; regenerate with
+# `make bundle`. Marked generated so GitHub collapses diffs — review the source.
+Sources/Navigator/EPUB/Assets/Static/scripts/*.js linguist-generated=true

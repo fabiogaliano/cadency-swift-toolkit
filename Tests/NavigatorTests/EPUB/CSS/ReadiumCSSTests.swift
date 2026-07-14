@@ -25,6 +25,9 @@ class ReadiumCSSTests: XCTestCase {
         .stylesheetLink(href: "https://readium/assets/\(folder)ReadiumCSS-after.css")
     }
 
+    // Always resolved from the assets root, regardless of the layout's stylesheet folder.
+    let cadencyReader = HTMLInjection.stylesheetLink(href: "https://readium/assets/CadencyReader.css")
+
     let audioFix = HTMLInjection.style("audio[controls] { width: revert; height: revert; }")
 
     let html =
@@ -53,6 +56,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
@@ -131,6 +135,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: """
                 --RS__colGap: 40.00000px !important;
@@ -160,6 +165,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(folder: "rtl/"),
                 cssDefault(folder: "rtl/"),
                 cssAfter(folder: "rtl/"),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: true),
@@ -183,6 +189,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(folder: "cjk-horizontal/"),
                 cssDefault(folder: "cjk-horizontal/"),
                 cssAfter(folder: "cjk-horizontal/"),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
@@ -206,6 +213,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(folder: "cjk-vertical/"),
                 cssDefault(folder: "cjk-vertical/"),
                 cssAfter(folder: "cjk-vertical/"),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
             ]
@@ -234,6 +242,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
@@ -265,6 +274,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
@@ -294,6 +304,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
@@ -324,7 +335,7 @@ class ReadiumCSSTests: XCTestCase {
             <html xml:lang="fr" dir="ltr" style="" xmlns="http://www.w3.org/1999/xhtml">
                 <head><link rel="stylesheet" href="https://readium/assets/ReadiumCSS-before.css" type="text/css"/>
                     <title>Publication</title>
-                <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0"/><link rel="stylesheet" href="https://readium/assets/ReadiumCSS-default.css" type="text/css"/><link rel="stylesheet" href="https://readium/assets/ReadiumCSS-after.css" type="text/css"/><style type="text/css">audio[controls] { width: revert; height: revert; }</style></head>
+                <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0"/><link rel="stylesheet" href="https://readium/assets/ReadiumCSS-default.css" type="text/css"/><link rel="stylesheet" href="https://readium/assets/ReadiumCSS-after.css" type="text/css"/><link rel="stylesheet" href="https://readium/assets/CadencyReader.css" type="text/css"/><style type="text/css">audio[controls] { width: revert; height: revert; }</style></head>
                 <body dir="ltr" lang="fr"></body>
             </html>
             """

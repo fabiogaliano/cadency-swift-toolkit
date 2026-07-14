@@ -6,7 +6,7 @@
 
 // Base script used by both reflowable and fixed layout resources.
 
-import "./gestures";
+import { activateBlockAtLocalPoint } from "./gestures";
 import "./keyboard";
 import { findFirstVisibleLocator } from "./dom";
 import {
@@ -39,4 +39,5 @@ global.readium = {
 
   // DOM
   findFirstVisibleLocator: findFirstVisibleLocator,
+  activateBlockAtLocalPoint: activateBlockAtLocalPoint,
 };

@@ -166,10 +166,10 @@ export function buildBlockLocator(blockElement) {
 /**
  * Builds the full activation payload for a block: its Locator, the range's
  * rectangle in the chapter iframe's own local viewport coordinates (named
- * `iframeRect`, not `rect`, precisely because it is *not* yet in top-level
- * WKWebView coordinates - the caller must add the iframe's own offset before
- * emitting it natively), and a transient, deterministic `blockKey` for
- * toggle behavior.
+ * `iframeLocalRect`, not `rect`, precisely because it is *not* yet in
+ * top-level WKWebView coordinates - the caller must add the iframe's own
+ * offset before emitting it natively), and a transient, deterministic
+ * `blockKey` for toggle behavior.
  *
  * Returns null if a valid Locator or a sane rect can't be produced.
  */
@@ -181,14 +181,14 @@ export function buildBlockActivationPayload(blockElement) {
     }
 
     const range = rangeForElement(blockElement);
-    const iframeRect = rangeLocalRect(range);
-    if (!iframeRect || !isSaneRect(iframeRect)) {
+    const iframeLocalRect = rangeLocalRect(range);
+    if (!iframeLocalRect || !isSaneRect(iframeLocalRect)) {
       return null;
     }
 
     return {
       locator,
-      iframeRect,
+      iframeLocalRect,
       blockKey: buildBlockKey(
         locator.href,
         locator.locations.cssSelector,
