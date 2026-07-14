@@ -394,7 +394,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
     }
 
-    private func setupWebView() {
+    /// Builds a wrapper web view with the configuration both open paths share: the
+    /// per-open `setupWebView()` and the app-launch `ContinuousWrapperPreloader`.
+    static func makeWrapperWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
@@ -406,7 +408,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             }
         #endif
 
-        webView = WKWebView(frame: view.bounds, configuration: configuration)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.backgroundColor = .clear
         webView.isOpaque = false
@@ -414,7 +416,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.showsVerticalScrollIndicator = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.navigationDelegate = self
 
         #if DEBUG && swift(>=5.8)
             if #available(macOS 13.3, iOS 16.4, *) {
@@ -422,22 +423,40 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             }
         #endif
 
-        view.addSubview(webView)
-        webView.addGestureRecognizer(blockDoubleTapRecognizer)
-
-        enableJSMessages()
-
         // Give each chapter iframe the reflowable Readium API (window.readium) by
         // injecting the reflowable script into subframes only. Without this, the
         // chapter documents have no `getDecorations`/selection support and the
         // wrapper's applyDecorationsToIframe silently no-ops. Guard to subframes so
         // the main wrapper frame keeps its own window.readium.
-        if let reflowable = Self.reflowableScript {
+        if let reflowable = reflowableScript {
             let subframeOnly = "if (window.top !== window.self) {\n\(reflowable)\n}"
             webView.configuration.userContentController.addUserScript(
                 WKUserScript(source: subframeOnly, injectionTime: .atDocumentStart, forMainFrameOnly: false)
             )
         }
+
+        return webView
+    }
+
+    /// True when this navigator adopted a pre-warmed wrapper whose page is already
+    /// booted, so `initialize()` skips the wrapper load entirely.
+    private var adoptedWarmWrapper = false
+
+    private func setupWebView() {
+        if let warmed = ContinuousWrapperPreloader.shared.take() {
+            webView = warmed
+            adoptedWarmWrapper = true
+            traceMark("wrapperAdopted")
+        } else {
+            webView = Self.makeWrapperWebView()
+        }
+        webView.frame = view.bounds
+        webView.navigationDelegate = self
+
+        view.addSubview(webView)
+        webView.addGestureRecognizer(blockDoubleTapRecognizer)
+
+        enableJSMessages()
 
         delegate?.navigator(self, setupUserScripts: webView.configuration.userContentController)
     }
@@ -473,7 +492,16 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             log(.error, DebugError("Failed to load positions.", cause: error))
         }
 
-        await loadWrapper()
+        if adoptedWarmWrapper {
+            // The pre-warmed page already finished loading and passed the wrapper
+            // probe, so go straight to spine initialization. Later wrapper reloads
+            // (CSS invalidation, process termination) still use `loadWrapper()`.
+            adoptedWarmWrapper = false
+            _ = on(.load(currentLocation))
+            wrapperDidLoad()
+        } else {
+            await loadWrapper()
+        }
     }
 
     private func loadWrapper() async {
