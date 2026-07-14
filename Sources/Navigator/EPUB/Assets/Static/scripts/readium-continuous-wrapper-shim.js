@@ -293,11 +293,34 @@
     };
 
     var firstPaintPosted = false;
+    var firstMountPosted = false;
     function watchForFirstPaint(iframe) {
+      if (!firstMountPosted) {
+        firstMountPosted = true;
+        postTrace("firstIframeMounted");
+      }
       iframe.addEventListener('load', function () {
         if (firstPaintPosted) return;
         var rect = iframe.getBoundingClientRect();
         if (rect.bottom <= 0 || rect.top >= window.innerHeight) return;
+        postTrace("firstIframeLoaded");
+        try {
+          var perf = iframe.contentWindow.performance;
+          var nav = perf.getEntriesByType('navigation')[0];
+          var parts = [];
+          if (nav) {
+            parts.push('doc:req=' + Math.round(nav.requestStart) + ',res=' + Math.round(nav.responseEnd) +
+              ',interactive=' + Math.round(nav.domInteractive) +
+              ',dcl=' + Math.round(nav.domContentLoadedEventStart) + '-' + Math.round(nav.domContentLoadedEventEnd) +
+              ',load=' + Math.round(nav.loadEventStart));
+          }
+          var res = perf.getEntriesByType('resource');
+          for (var ri = 0; ri < res.length; ri++) {
+            var r = res[ri];
+            parts.push(r.name.split('/').pop().split('?')[0] + '=' + Math.round(r.startTime) + '+' + Math.round(r.duration));
+          }
+          postTrace("firstIframePerf " + parts.join(' '));
+        } catch (e) { }
         // Second rAF fires only after a frame containing the loaded chapter
         // has been committed — the closest in-page proxy for first readable paint.
         requestAnimationFrame(function () {
