@@ -223,13 +223,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         public var diagnosticHandler: ((String) -> Void)?
     #endif
 
-    // temporary open-latency trace (spike)
-    private func traceMark(_ name: String) {
-        #if DEBUG
-            diagnosticHandler?("[open-trace] mark=\(name) t=\(Int64(Date().timeIntervalSince1970 * 1000))")
-        #endif
-    }
-
     /// Navigation state.
     private enum State: Equatable {
         case initializing
@@ -273,13 +266,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     private var decorations: [String: [DiffableDecoration]] = [:]
     private var decorationCallbacks: [String: [DecorableNavigator.OnActivatedCallback]] = [:]
-
-    /// The reflowable Readium script, injected into each chapter iframe so the
-    /// chapter document exposes `window.readium` (decorations, selection, gestures).
-    /// The main wrapper frame runs `readium-continuous-wrapper.js` instead.
-    private static let reflowableScript: String? = Bundle.module
-        .url(forResource: "readium-reflowable", withExtension: "js", subdirectory: "Assets/Static/scripts")
-        .flatMap { try? String(contentsOf: $0) }
 
     // MARK: - Initialization
 
@@ -394,61 +380,17 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
     }
 
-    /// Builds a wrapper web view with the configuration both open paths share: the
-    /// per-open `setupWebView()` and the app-launch `ContinuousWrapperPreloader`.
-    static func makeWrapperWebView() -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.allowsInlineMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = []
-
-        // Disable Writing tools in iOS 18+
-        #if compiler(>=6.0)
-            if #available(iOS 18.0, *) {
-                configuration.writingToolsBehavior = .none
-            }
-        #endif
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        webView.backgroundColor = .clear
-        webView.isOpaque = false
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.showsHorizontalScrollIndicator = false
-        webView.scrollView.showsVerticalScrollIndicator = true
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-
-        #if DEBUG && swift(>=5.8)
-            if #available(macOS 13.3, iOS 16.4, *) {
-                webView.isInspectable = true
-            }
-        #endif
-
-        // Give each chapter iframe the reflowable Readium API (window.readium) by
-        // injecting the reflowable script into subframes only. Without this, the
-        // chapter documents have no `getDecorations`/selection support and the
-        // wrapper's applyDecorationsToIframe silently no-ops. Guard to subframes so
-        // the main wrapper frame keeps its own window.readium.
-        if let reflowable = reflowableScript {
-            let subframeOnly = "if (window.top !== window.self) {\n\(reflowable)\n}"
-            webView.configuration.userContentController.addUserScript(
-                WKUserScript(source: subframeOnly, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-            )
-        }
-
-        return webView
-    }
-
     /// True when this navigator adopted a pre-warmed wrapper whose page is already
     /// booted, so `initialize()` skips the wrapper load entirely.
     private var adoptedWarmWrapper = false
 
     private func setupWebView() {
-        if let warmed = ContinuousWrapperPreloader.shared.take() {
+        if let warmed = WrapperPreparationEngine.shared.take() {
             webView = warmed
             adoptedWarmWrapper = true
-            traceMark("wrapperAdopted")
+
         } else {
-            webView = Self.makeWrapperWebView()
+            webView = WrapperPreparationEngine.makeWrapperWebView()
         }
         webView.frame = view.bounds
         webView.navigationDelegate = self
@@ -516,7 +458,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
             log(.debug, "Loading continuous wrapper baseURL=\(viewModel.publicationBaseURL.string) assetsURL=\(viewModel.assetsURL.string)")
 
-            traceMark("wrapperLoadStart")
+
             webView.loadHTMLString(html, baseURL: viewModel.publicationBaseURL.url)
 
             _ = on(.load(currentLocation))
@@ -575,12 +517,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         registerJSMessage(named: "blockActivated") { [weak self] body, frameInfo in
             self?.didReceiveBlockActivated(body, frameInfo: frameInfo)
         }
-        // temporary open-latency trace (spike): wrapper JS posts timestamped marks here
-        registerJSMessage(named: "openTrace") { [weak self] body, _ in
-            #if DEBUG
-                self?.diagnosticHandler?("[open-trace] \(body as? String ?? "")")
-            #endif
-        }
+
 
         for (name, _) in jsMessages {
             webView.configuration.userContentController.add(self, name: name)
@@ -638,7 +575,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private func wrapperDidLoad() {
         guard !isWrapperLoaded else { return }
         isWrapperLoaded = true
-        traceMark("wrapperReady")
+
 
         Task {
             await initializeWrapper()
@@ -676,9 +613,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             return
         }
 
-        traceMark("spineSerialized")
         await evaluateScript("continuousWrapper.initialize(\(spineJSON), \(configJSON));")
-        traceMark("spineInitEvaluated")
 
         // Register decoration templates
         let templates = self.config.decorationTemplates.reduce(into: [:]) { styles, item in
