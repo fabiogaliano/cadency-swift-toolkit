@@ -31,7 +31,7 @@ import WebKit
         /// plus cache evictions. `WrapperPreparationEngine` forwards its own
         /// handler here so the app's existing `onDiagnostics` wiring picks
         /// these up without changes.
-        public var diagnosticHandler: ((String) -> Void)?
+        var diagnosticHandler: ((String) -> Void)?
 
         /// Emits one serve trace line. `receivedAt` is the moment WebKit handed
         /// us the scheme task; the gap to `servedAt` includes main-actor
