@@ -1,6 +1,28 @@
-# Readium Swift Toolkit
+# Cadency Reader
 
-[Readium Mobile](https://github.com/readium/mobile) is a toolkit for ebooks, audiobooks and comics written in Swift & Kotlin.
+A fork of the [Readium Swift Toolkit](https://github.com/readium/swift-toolkit) — a toolkit for ebooks, audiobooks and comics written in Swift — extended with the reading-engine work behind [Cadency](https://getcadency.com). Everything upstream provides is included unchanged; this fork layers a continuous vertical-scroll EPUB navigator, faster book opening, and block-level reading interactions on top.
+
+> [!NOTE]
+> This is a downstream fork maintained for Cadency's reader. For the canonical, general-purpose toolkit, use [readium/swift-toolkit](https://github.com/readium/swift-toolkit). We track upstream and pull in Readium's patches and fixes as much as possible. Upstream's documentation is preserved below the fork notes.
+
+## What this fork adds
+
+- **Continuous vertical-scroll navigator** — the whole book scrolls as one continuous surface, instead of paginating one resource at a time.
+  <br>_A single wrapper page mounts one `<iframe>` per chapter, with ReadiumCSS preferences and decoration scripts injected per frame so styling and highlights stay uniform across chapters._
+- **Faster book open** — **~3.5× (−71%)** faster cold, **~4× (−75%)** faster warm re-open on our reference fixture. _(Provisional; being re-baselined on the `WebViewServer` transport.)_
+  <br>_A pre-warmed wrapper `WKWebView` (`ContinuousWrapperPreloader`) is adopted at open to remove the WebContent-boot cost — the biggest slice — while a press-down `prewarm` overlaps the `Publication` parse via a coalescing `PublicationProvider`, and content is served over an in-process `WebViewServer`._
+- **Block-level interaction** — tap or double-tap a paragraph to act on it.
+  <br>_Semantic block detection gives each block a stable Locator; a testable arbitration state machine defers to any in-progress text selection (avoiding the tap/selection race) before emitting a validated `blockActivated` bridge event._
+- **Resilient decorations & precise selection** — highlights survive wrapper re-layout and reinitialization within a reading session.
+  <br>_The navigator keeps a decoration snapshot in memory and replays it when the wrapper reloads; selection Locators are anchored to the exact selected range. Persisting highlights across launches is the host app's job — the engine keeps them live, not on disk._
+- **Normalized Cadency stylesheet** — an optional reading stylesheet, gated behind an accessibility-normalization flag.
+
+## Acknowledgements
+
+Built on the excellent work of [Readium](https://readium.org) and [EDRLab](https://www.edrlab.org). The original toolkit code remains under Readium's [BSD 3-Clause license](LICENSE), and this fork's changes are released under the same terms. Thank you to the Readium community.
+
+---
+
 
 > [!TIP]
 > **Take a look at the [guide to quickly get started](docs/Guides/Getting%20Started.md).** A [Test App](TestApp) demonstrates how to integrate the Readium Swift toolkit in your own reading app.
