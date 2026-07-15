@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: org.readium
 packages:
   Readium:
-    url: https://github.com/readium/swift-toolkit.git
+    url: https://github.com/fabiogaliano/cadency-swift-toolkit.git
     VERSION
   R2LCPClient:
     path: R2LCPClient
