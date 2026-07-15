@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -88,7 +88,7 @@ public class PublicationSpeechSynthesizer: Loggable {
     public private(set) var state: State = .stopped {
         didSet {
             if oldValue.isPlaying != state.isPlaying {
-                AudioSession.shared.user(audioSessionUser, didChangePlaying: state.isPlaying)
+                audioSession.user(audioSessionUser, didChangePlaying: state.isPlaying)
             }
 
             Task {
@@ -105,6 +105,7 @@ public class PublicationSpeechSynthesizer: Loggable {
     public weak var delegate: PublicationSpeechSynthesizerDelegate?
 
     private let publication: Publication
+    private let audioSession: AudioSessionManaging
     private let engineFactory: EngineFactory
     private let tokenizerFactory: TokenizerFactory
 
@@ -117,6 +118,7 @@ public class PublicationSpeechSynthesizer: Loggable {
     ///   - config: Initial TTS configuration.
     ///   - audioSessionConfig: Configuration of the audio session used to play
     ///     the utterances.
+    ///   - audioSession: Audio session manager used to coordinate playback.
     ///   - engineFactory: Factory to create an instance of `TtsEngine`. Defaults to `AVTTSEngine`.
     ///   - tokenizerFactory: Factory to create a `ContentTokenizer` which will be used to
     ///     split each `ContentElement` item into smaller chunks. Splits by sentences by default.
@@ -129,6 +131,7 @@ public class PublicationSpeechSynthesizer: Loggable {
             mode: .spokenAudio,
             routeSharingPolicy: .longFormAudio
         ),
+        audioSession: AudioSessionManaging = AudioSession.shared,
         engineFactory: @escaping EngineFactory = { AVTTSEngine() },
         tokenizerFactory: @escaping TokenizerFactory = defaultTokenizerFactory,
         delegate: PublicationSpeechSynthesizerDelegate? = nil
@@ -139,10 +142,15 @@ public class PublicationSpeechSynthesizer: Loggable {
 
         self.publication = publication
         self.config = config
+        self.audioSession = audioSession
         audioSessionUser = AudioSessionUser(config: audioSessionConfig)
         self.engineFactory = engineFactory
         self.tokenizerFactory = tokenizerFactory
         self.delegate = delegate
+    }
+
+    deinit {
+        audioSession.end(for: audioSessionUser)
     }
 
     /// The default content tokenizer will split the `Content.Element` items into individual sentences.
@@ -156,7 +164,7 @@ public class PublicationSpeechSynthesizer: Loggable {
         )
     }
 
-    private var currentTask: Task<Void, Never>? = nil
+    private var currentTask: Task<Void, Never>?
 
     private lazy var engine: TTSEngine = engineFactory()
 
@@ -177,11 +185,11 @@ public class PublicationSpeechSynthesizer: Loggable {
     }
 
     /// Cache for the last requested voice, for performance.
-    private var lastUsedVoice: TTSVoice? = nil
+    private var lastUsedVoice: TTSVoice?
 
     /// (Re)starts the synthesizer from the given locator or the beginning of the publication.
     public func start(from startLocator: Locator? = nil) {
-        AudioSession.shared.start(with: audioSessionUser, isPlaying: false)
+        audioSession.start(with: audioSessionUser, isPlaying: false)
 
         currentTask?.cancel()
         publicationIterator = publication.content(from: startLocator)?.iterator()
@@ -245,7 +253,7 @@ public class PublicationSpeechSynthesizer: Loggable {
     }
 
     /// `Content.Iterator` used to iterate through the `publication`.
-    private var publicationIterator: ContentIterator? = nil {
+    private var publicationIterator: ContentIterator? {
         didSet {
             utterances = CursorList()
         }
@@ -320,8 +328,7 @@ public class PublicationSpeechSynthesizer: Loggable {
             return .right(utterance.language
                 ?? config.defaultLanguage
                 ?? publication.metadata.language
-                ?? Language.current
-            )
+                ?? Language.current)
         }
     }
 
@@ -420,10 +427,6 @@ public class PublicationSpeechSynthesizer: Loggable {
 
         init(config: AudioSession.Configuration) {
             audioConfiguration = config
-        }
-
-        deinit {
-            AudioSession.shared.end(for: self)
         }
 
         func play() {}

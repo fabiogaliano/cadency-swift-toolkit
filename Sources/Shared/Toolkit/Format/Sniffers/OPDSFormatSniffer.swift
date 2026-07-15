@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -49,9 +49,10 @@ public class OPDSFormatSniffer: FormatSniffer {
                 }
 
         } else if format.conformsTo(.json) {
-            return await blob.readAsJSON()
+            return await blob.read()
+                .asJSONObjectValue()
                 .map { json in
-                    guard let json = json as? [String: Any] else {
+                    guard let json = json else {
                         return nil
                     }
 

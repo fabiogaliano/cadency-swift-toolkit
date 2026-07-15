@@ -1,17 +1,28 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
 
 import Foundation
 
+private let cssSelectorKey = "cssSelector"
+
 /// HTML extensions for `Locator.Locations`.
 /// https://github.com/readium/architecture/blob/master/models/locators/extensions/html.md
 public extension Locator.Locations {
     /// A CSS Selector.
     var cssSelector: String? {
-        otherLocations["cssSelector"] as? String
+        get {
+            otherLocations[cssSelectorKey]?.string
+        }
+        set {
+            if let newValue {
+                otherLocations[cssSelectorKey] = .string(newValue)
+            } else {
+                otherLocations.removeValue(forKey: cssSelectorKey)
+            }
+        }
     }
 
     /// `partialCFI` is an expression conforming to the "right-hand" side of the EPUB CFI syntax,
@@ -20,11 +31,11 @@ public extension Locator.Locations {
     /// that the wrapping `epubcfi(***)` syntax is not used for the `partialCFI` string, i.e.
     /// the "fragment" part of the CFI grammar is ignored.
     var partialCFI: String? {
-        otherLocations["partialCfi"] as? String
+        otherLocations["partialCfi"]?.string
     }
 
     /// An HTML DOM range.
     var domRange: DOMRange? {
-        try? DOMRange(json: otherLocations["domRange"], warnings: self)
+        try? otherLocations["domRange"]?.decode(warnings: self)
     }
 }

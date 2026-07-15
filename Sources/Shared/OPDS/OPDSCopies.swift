@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -8,8 +8,8 @@ import Foundation
 import ReadiumInternal
 
 /// Library-specific feature that contains information about the copies that a library has acquired.
-/// https://drafts.opds.io/schema/properties.schema.json
-public struct OPDSCopies: Equatable {
+/// https://specs.opds.io/schema/properties.schema.json
+public struct OPDSCopies: Equatable, JSONValueDecodable, JSONObjectEncodable {
     public let total: Int?
     public let available: Int?
 
@@ -18,25 +18,25 @@ public struct OPDSCopies: Equatable {
         self.available = available
     }
 
-    public init?(json: Any?, warnings: WarningLogger? = nil) throws {
-        if json == nil {
+    public init?<T: JSONValueEncodable>(json: T?, warnings: WarningLogger?) throws {
+        guard let json = json?.jsonValue else {
             return nil
         }
-        guard let jsonObject = json as? [String: Any] else {
+        guard let jsonObject = json.object else {
             warnings?.log("Invalid Copies object", model: Self.self, source: json)
             throw JSONError.parsing(Self.self)
         }
 
         self.init(
-            total: parsePositive(jsonObject["total"]),
-            available: parsePositive(jsonObject["available"])
+            total: jsonObject["total"]?.nonNegative(),
+            available: jsonObject["available"]?.nonNegative()
         )
     }
 
-    public var json: [String: Any] {
-        makeJSON([
-            "total": encodeIfNotNil(total),
-            "available": encodeIfNotNil(available),
+    public var jsonObject: [String: JSONValue] {
+        .init([
+            "total": total,
+            "available": available,
         ])
     }
 }

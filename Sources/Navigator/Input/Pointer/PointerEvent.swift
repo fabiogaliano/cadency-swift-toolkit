@@ -1,10 +1,11 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
 
 import Foundation
+import ReadiumShared
 
 /// Represents a pointer event (e.g. touch, mouse) emitted by a navigator.
 public struct PointerEvent: Equatable {
@@ -19,6 +20,28 @@ public struct PointerEvent: Equatable {
 
     /// Key modifiers pressed alongside the pointer.
     public var modifiers: KeyModifiers
+
+    /// The content element under the pointer, if recognized by the navigator.
+    @_spi(ExperimentalTargetElement) public var targetElement: TargetElement?
+
+    /// A content element targeted by a pointer event, paired with its
+    /// on-screen frame.
+    @_spi(ExperimentalTargetElement) public struct TargetElement: Equatable {
+        /// Frame of the element relative to the navigator's view.
+        public var frame: CGRect
+
+        /// The content element under the pointer.
+        public var content: any ContentElement
+
+        public init(frame: CGRect, content: any ContentElement) {
+            self.frame = frame
+            self.content = content
+        }
+
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.frame == rhs.frame && lhs.content.isEqualTo(rhs.content)
+        }
+    }
 
     /// Phase of a pointer event.
     public enum Phase: Equatable, CustomStringConvertible {

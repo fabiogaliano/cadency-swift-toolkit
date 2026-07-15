@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -19,17 +19,31 @@ public protocol AudioSessionUser: AnyObject {
 }
 
 public extension AudioSessionUser {
-    var audioConfiguration: AudioSession.Configuration { .init() }
+    var audioConfiguration: AudioSession.Configuration {
+        .init()
+    }
+}
+
+/// Manages the app's audio session for Readium audio consumers.
+public protocol AudioSessionManaging {
+    /// Starts a new audio session with the given `user`.
+    func start(with user: AudioSessionUser, isPlaying: Bool)
+
+    /// Ends the current audio session.
+    func end(for user: AudioSessionUser)
+
+    /// Indicates whether the `user` is playing.
+    func user(_ user: AudioSessionUser, didChangePlaying isPlaying: Bool)
 }
 
 /// Manages an activated `AVAudioSession`.
 @MainActor
-public final class AudioSession: Loggable {
+public final class AudioSession: AudioSessionManaging, Loggable {
     public struct Configuration: Equatable {
-        let category: AVAudioSession.Category
-        let mode: AVAudioSession.Mode
-        let routeSharingPolicy: AVAudioSession.RouteSharingPolicy
-        let options: AVAudioSession.CategoryOptions
+        public let category: AVAudioSession.Category
+        public let mode: AVAudioSession.Mode
+        public let routeSharingPolicy: AVAudioSession.RouteSharingPolicy
+        public let options: AVAudioSession.CategoryOptions
 
         public init(
             category: AVAudioSession.Category = .playback,
@@ -57,7 +71,7 @@ public final class AudioSession: Loggable {
         NotificationCenter.default.removeObserver(self)
     }
 
-    struct User {
+    fileprivate struct User {
         let id: ObjectIdentifier
         private(set) weak var user: AudioSessionUser?
 

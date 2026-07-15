@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -47,9 +47,11 @@ public struct JSONWarning: Warning {
     /// Details about the failure.
     public let reason: String
     /// Source JSON object.
-    public let source: Any?
+    public let source: JSONValue?
     public let severity: WarningSeverityLevel
-    public var tag: String { "json" }
+    public var tag: String {
+        "json"
+    }
 
     public var message: String {
         "JSON \(modelType): \(reason)"
@@ -57,7 +59,7 @@ public struct JSONWarning: Warning {
 }
 
 extension WarningLogger {
-    func log(_ reason: String, model: Any.Type, source: Any? = nil, severity: WarningSeverityLevel = .major) {
+    func log(_ reason: String, model: Any.Type, source: JSONValue? = nil, severity: WarningSeverityLevel = .major) {
         log(JSONWarning(modelType: model, reason: reason, source: source, severity: severity))
     }
 }

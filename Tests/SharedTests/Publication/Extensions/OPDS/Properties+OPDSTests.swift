@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -32,7 +32,7 @@ class PropertiesOPDSTests: XCTestCase {
         let sut = Properties(["price": [
             "currency": "EUR",
             "value": 3.65,
-        ] as [String: Any]])
+        ]])
 
         XCTAssertEqual(sut.price, OPDSPrice(currency: "EUR", value: 3.65))
     }

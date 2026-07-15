@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -36,5 +36,5 @@ protocol ReaderFormatModuleDelegate: AnyObject {
     func presentDRM(for publication: Publication, from viewController: UIViewController)
 
     func presentAlert(_ title: String, message: String, from viewController: UIViewController)
-    func presentError<T: UserErrorConvertible>(_ error: T, from viewController: UIViewController)
+    func presentError(_ error: Error, from viewController: UIViewController)
 }

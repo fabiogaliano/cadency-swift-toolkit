@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -93,6 +93,12 @@ public extension String {
     }
 
     func orNilIfBlank() -> String? {
-        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
+        isBlank ? nil : self
+    }
+
+    /// Returns `true` if the string is empty or contains only whitespace and
+    /// newline characters.
+    var isBlank: Bool {
+        allSatisfy { $0.isWhitespace || $0.isNewline }
     }
 }

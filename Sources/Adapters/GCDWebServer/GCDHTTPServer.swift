@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -10,6 +10,7 @@ import ReadiumInternal
 import ReadiumShared
 import UIKit
 
+@available(*, deprecated, message: "The Readium navigators do not need an HTTP server anymore. This adapter will be removed in a future version of the toolkit.")
 public enum GCDHTTPServerError: Error {
     case failedToStartServer(cause: Error)
     case serverNotStarted
@@ -18,6 +19,7 @@ public enum GCDHTTPServerError: Error {
 }
 
 /// Implementation of `HTTPServer` using ReadiumGCDWebServer under the hood.
+@available(*, deprecated, message: "The Readium navigators do not need an HTTP server anymore. This adapter will be removed in a future version of the toolkit.")
 public class GCDHTTPServer: HTTPServer, Loggable {
     /// The actual underlying HTTP server instance.
     private let server = ReadiumGCDWebServer()
@@ -46,7 +48,9 @@ public class GCDHTTPServer: HTTPServer, Loggable {
 
     /// Creates a new instance of the HTTP server.
     ///
-    /// - Parameter logLevel: See `ReadiumGCDWebServer.setLogLevel`.
+    /// - Parameters:
+    ///   - assetRetriever: The retriever used to fetch assets for the server.
+    ///   - logLevel: See `ReadiumGCDWebServer.setLogLevel`.
     public init(
         assetRetriever: AssetRetriever,
         logLevel: Int = 3

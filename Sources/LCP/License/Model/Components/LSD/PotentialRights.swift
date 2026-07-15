@@ -1,16 +1,18 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
 
 import Foundation
+import ReadiumShared
 
-public struct PotentialRights {
+public struct PotentialRights: JSONValueDecodable {
     /// Time and Date when the license ends.
     public let end: Date?
 
-    init(json: [String: Any]) throws {
-        end = (json["end"] as? String)?.dateFromISO8601
+    public init?<T: JSONValueEncodable>(json: T?, warnings: WarningLogger?) throws {
+        let json = json?.jsonValue.object
+        end = json?["end"]?.date
     }
 }

@@ -588,26 +588,26 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     private func initializeWrapper() async {
         // Build spine items configuration
-        let spineItems: [[String: Any]] = readingOrder.enumerated().map { index, link in
-            [
-                "spineIndex": index,
-                "href": link.url().string,
-                "url": viewModel.url(to: link).string,
-                "title": link.title ?? "",
-                "link": link.json,
-            ]
+        let spineItems: [JSONValue] = readingOrder.enumerated().map { index, link in
+            .object([
+                "spineIndex": index.jsonValue,
+                "href": link.url().string.jsonValue,
+                "url": viewModel.url(to: link).string.jsonValue,
+                "title": (link.title ?? "").jsonValue,
+                "link": .object(link.jsonObject),
+            ])
         }
 
-        let config: [String: Any] = [
-            "prefetchBehind": self.config.prefetchBehind,
-            "prefetchAhead": self.config.prefetchAhead,
-            "maxMounted": self.config.maxMountedChapters,
-            "defaultChapterHeight": self.config.defaultChapterHeight,
+        let config: [String: JSONValue] = [
+            "prefetchBehind": self.config.prefetchBehind.jsonValue,
+            "prefetchAhead": self.config.prefetchAhead.jsonValue,
+            "maxMounted": self.config.maxMountedChapters.jsonValue,
+            "defaultChapterHeight": Double(self.config.defaultChapterHeight).jsonValue,
         ]
 
         guard
-            let spineJSON = serializeJSONString(spineItems),
-            let configJSON = serializeJSONString(config)
+            let spineJSON = try? spineItems.jsonString(),
+            let configJSON = try? config.jsonString()
         else {
             log(.error, "Failed to serialize spine items or config")
             return
@@ -616,10 +616,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         await evaluateScript("continuousWrapper.initialize(\(spineJSON), \(configJSON));")
 
         // Register decoration templates
-        let templates = self.config.decorationTemplates.reduce(into: [:]) { styles, item in
-            styles[item.key.rawValue] = item.value.json
+        let templates = self.config.decorationTemplates.reduce(into: [String: JSONValue]()) { styles, item in
+            styles[item.key.rawValue] = .object(item.value.jsonObject)
         }
-        if let templatesJSON = serializeJSONString(templates) {
+        if let templatesJSON = try? templates.jsonString() {
             await evaluateScript("continuousWrapper.registerDecorationTemplates(\(templatesJSON));")
         }
 
@@ -1048,19 +1048,19 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     /// and reconciles every loaded chapter against it. A no-op when the wrapper
     /// isn't loaded, since `evaluateScript` gates on `isWrapperLoaded`.
     private func sendDecorations(_ diffables: [DiffableDecoration], in group: String) async {
-        let decorationData = diffables.map { diffable -> [String: Any] in
+        let decorationData: [JSONValue] = diffables.map { diffable in
             let d = diffable.decoration
-            return [
-                "id": d.id,
-                "locator": d.locator.json,
-                "style": d.style.id.rawValue,
-                "element": config.decorationTemplates[d.style.id]?.element(d) ?? "",
-            ]
+            return .object([
+                "id": d.id.jsonValue,
+                "locator": .object(d.locator.jsonObject),
+                "style": d.style.id.rawValue.jsonValue,
+                "element": (config.decorationTemplates[d.style.id]?.element(d) ?? "").jsonValue,
+            ])
         }
 
         guard
-            let groupJSON = serializeJSONString(group),
-            let decsJSON = serializeJSONString(decorationData)
+            let groupJSON = try? group.jsonString(),
+            let decsJSON = try? decorationData.jsonString()
         else { return }
 
         // evaluateScript already logs evaluation failures.
@@ -1075,7 +1075,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         // Mark the group as activable in the wrapper
         Task {
             guard isWrapperLoaded else { return }
-            guard let groupJSON = serializeJSONString(group) else { return }
+            guard let groupJSON = try? group.jsonString() else { return }
             await evaluateScript("continuousWrapper.setDecorationGroupActivable(\(groupJSON), true);")
         }
     }

@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -7,25 +7,9 @@
 import Foundation
 import ReadiumShared
 
-/// To modify depending of the profiles supported by liblcp.a.
-private let supportedProfiles = [
-    "http://readium.org/lcp/basic-profile",
-    "http://readium.org/lcp/profile-1.0",
-    "http://readium.org/lcp/profile-2.0",
-    "http://readium.org/lcp/profile-2.1",
-    "http://readium.org/lcp/profile-2.2",
-    "http://readium.org/lcp/profile-2.3",
-    "http://readium.org/lcp/profile-2.4",
-    "http://readium.org/lcp/profile-2.5",
-    "http://readium.org/lcp/profile-2.6",
-    "http://readium.org/lcp/profile-2.7",
-    "http://readium.org/lcp/profile-2.8",
-    "http://readium.org/lcp/profile-2.9",
-]
-
 typealias Context = Result<LCPClientContext, LCPError>
 
-// Holds the License/Status Documents and the DRM context, once validated.
+/// Holds the License/Status Documents and the DRM context, once validated.
 struct ValidatedDocuments {
     let license: LicenseDocument
     let context: Context
@@ -44,7 +28,6 @@ struct ValidatedDocuments {
 /// Use `observe` to be notified when any validation is done or if an error occurs.
 final actor LicenseValidation: Loggable {
     // Dependencies for the State's handlers
-    fileprivate let isProduction: Bool
     fileprivate let client: LCPClient
     fileprivate let authentication: LCPAuthenticating?
     fileprivate let allowUserInteraction: Bool
@@ -54,12 +37,12 @@ final actor LicenseValidation: Loggable {
     fileprivate let httpClient: HTTPClient
     fileprivate let passphrases: PassphrasesService
 
-    // List of observers notified when the Documents are validated, or if an error occurred.
+    /// List of observers notified when the Documents are validated, or if an error occurred.
     fileprivate var observers: [(callback: Observer, policy: ObserverPolicy)] = []
 
     fileprivate let onLicenseValidated: (LicenseDocument) async throws -> Void
 
-    // Current state in the validation steps.
+    /// Current state in the validation steps.
     private(set) var state: State = .start {
         didSet {
             log(.debug, "* \(state)")
@@ -70,7 +53,6 @@ final actor LicenseValidation: Loggable {
         authentication: LCPAuthenticating?,
         allowUserInteraction: Bool,
         sender: Any?,
-        isProduction: Bool,
         client: LCPClient,
         crl: CRLService,
         device: DeviceService,
@@ -81,7 +63,6 @@ final actor LicenseValidation: Loggable {
         self.authentication = authentication
         self.allowUserInteraction = allowUserInteraction
         self.sender = sender
-        self.isProduction = isProduction
         self.client = client
         self.crl = crl
         self.device = device
@@ -90,7 +71,7 @@ final actor LicenseValidation: Loggable {
         self.onLicenseValidated = onLicenseValidated
     }
 
-    // Raw Document's data to validate.
+    /// Raw Document's data to validate.
     enum Document {
         case license(Data)
         case status(Data)
@@ -153,12 +134,14 @@ extension LicenseValidation {
                 } else {
                     self = .fetchStatus(license)
                 }
+
             case let (.validateLicense(_, _), .failed(error)):
                 self = .failure(error)
 
             // 2. Fetch the status document
             case let (.fetchStatus(license), .retrievedStatusData(data)):
                 self = .validateStatus(license, data)
+
             case let (.fetchStatus(license), .failed(_)):
                 // We ignore any error while fetching the Status Document, as it is optional
                 self = .checkLicenseStatus(license, nil, statusDocumentTakesPrecedence: false)
@@ -171,6 +154,7 @@ extension LicenseValidation {
                 } else {
                     self = .checkLicenseStatus(license, status, statusDocumentTakesPrecedence: false)
                 }
+
             case let (.validateStatus(license, _), .failed(_)):
                 // We ignore any error while validating the Status Document, as it is optional
                 self = .checkLicenseStatus(license, nil, statusDocumentTakesPrecedence: false)
@@ -178,6 +162,7 @@ extension LicenseValidation {
             // 3. Get an updated license if needed
             case let (.fetchLicense(_, status), .retrievedLicenseData(data)):
                 self = .validateLicense(data, status)
+
             case let (.fetchLicense(license, status), .failed(_)):
                 // We ignore any error while fetching the updated License Document
                 // Note: since we failed to get the updated License, then the Status Document will take precedence over the License when checking the status.
@@ -194,8 +179,10 @@ extension LicenseValidation {
             // 5. Get the passphrase associated with the license
             case let (.requestPassphrase(license, status), .retrievedPassphrase(passphrase)):
                 self = .validateIntegrity(license, status, passphrase: passphrase)
+
             case let (.requestPassphrase, .failed(error)):
                 self = .failure(error)
+
             case let (.requestPassphrase(license, status), .passphraseNotFound):
                 self = .valid(ValidatedDocuments(license, .failure(.missingPassphrase), status))
 
@@ -207,6 +194,7 @@ extension LicenseValidation {
                 } else {
                     self = .valid(documents)
                 }
+
             case let (.validateIntegrity(_, _, _), .failed(error)):
                 self = .failure(error)
 
@@ -217,6 +205,7 @@ extension LicenseValidation {
                 } else {
                     self = .valid(documents)
                 }
+
             case let (.registerDevice(documents, _), .failed(_)):
                 // We ignore any error while registrating the device
                 self = .valid(documents)
@@ -236,25 +225,25 @@ extension LicenseValidation {
     }
 
     fileprivate enum Event {
-        // Raised when reading the License from its container, or when updating it from an LCP server.
+        /// Raised when reading the License from its container, or when updating it from an LCP server.
         case retrievedLicenseData(Data)
-        // Raised when the License Document is parsed and its structure is validated.
+        /// Raised when the License Document is parsed and its structure is validated.
         case validatedLicense(LicenseDocument)
-        // Raised after fetching the Status Document, or receiving it as a response of an LSD interaction.
+        /// Raised after fetching the Status Document, or receiving it as a response of an LSD interaction.
         case retrievedStatusData(Data)
-        // Raised after parsing and validating a Status Document's data.
+        /// Raised after parsing and validating a Status Document's data.
         case validatedStatus(StatusDocument)
-        // Raised after the License's status was checked, with any occurred status error.
+        /// Raised after the License's status was checked, with any occurred status error.
         case checkedLicenseStatus(StatusError?)
-        // Raised when we retrieved the passphrase from the local database, or from prompting the user.
+        /// Raised when we retrieved the passphrase from the local database, or from prompting the user.
         case retrievedPassphrase(String)
-        // Raised after validating the integrity of the License using liblcp.a.
+        /// Raised after validating the integrity of the License using liblcp.a.
         case validatedIntegrity(LCPClientContext)
-        // Raised when the device is registered, with an optional updated Status Document.
+        /// Raised when the device is registered, with an optional updated Status Document.
         case registeredDevice(Data?)
-        // Raised when any error occurs during the validation workflow.
+        /// Raised when any error occurs during the validation workflow.
         case failed(Error)
-        // Raised when no passphrase could be found or given by the user.
+        /// Raised when no passphrase could be found or given by the user.
         case passphraseNotFound
     }
 
@@ -271,9 +260,12 @@ extension LicenseValidation {
     private func validateLicense(data: Data) async throws {
         let license = try LicenseDocument(data: data)
 
-        // In test mode, only the basic profile is authorized.
-        // This is done here instead of during the integrity check because the passphrase can't be validated.
-        guard isProduction || license.encryption.profile == "http://readium.org/lcp/basic-profile" else {
+        // Reject the license early (before passphrase validation) if liblcp doesn't
+        // support its profile, to report a clear error instead of a confusing
+        // "incorrect passphrase". An empty list means the profiles are unknown, so we
+        // defer to `createContext` rather than blocking a possibly-valid license.
+        let supportedProfiles = client.getSupportedLCPProfileURIs()
+        guard supportedProfiles.isEmpty || supportedProfiles.contains(license.encryption.profile) else {
             throw LCPError.licenseProfileNotSupported
         }
 
@@ -363,13 +355,7 @@ extension LicenseValidation {
     }
 
     private func validateIntegrity(of license: LicenseDocument, with passphrase: String) async throws {
-        // 1. Checks the profile
-        let profile = license.encryption.profile
-        guard supportedProfiles.contains(profile) else {
-            throw LCPError.licenseProfileNotSupported
-        }
-
-        // 2. Creates the DRM context
+        // Creates the DRM context
         let pemCrl = try await crl.retrieve()
         let context = try client.createContext(jsonLicense: license.jsonString, hashedPassphrase: passphrase, pemCrl: pemCrl)
 
@@ -420,9 +406,9 @@ extension LicenseValidation {
     typealias Observer = (Result<ValidatedDocuments, Error>) -> Void
 
     enum ObserverPolicy {
-        // The observer is automatically removed when called.
+        /// The observer is automatically removed when called.
         case once
-        // The observer is called everytime the validation is finished.
+        /// The observer is called everytime the validation is finished.
         case always
     }
 

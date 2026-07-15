@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -48,7 +48,6 @@ final class ReaderModule: ReaderModuleAPI {
 
         formatModules = [
             AudiobookModule(delegate: self),
-            CBZModule(delegate: self),
             EPUBModule(delegate: self),
             PDFModule(delegate: self),
         ]
@@ -85,7 +84,7 @@ final class ReaderModule: ReaderModuleAPI {
                 )
                 await present(readerViewController)
             } catch {
-                delegate.presentError(UserError(error), from: navigationController)
+                delegate.presentError(error, from: navigationController)
             }
         }
     }
@@ -117,7 +116,7 @@ extension ReaderModule: ReaderFormatModuleDelegate {
         delegate?.presentAlert(title, message: message, from: viewController)
     }
 
-    func presentError<T: UserErrorConvertible>(_ error: T, from viewController: UIViewController) {
+    func presentError(_ error: Error, from viewController: UIViewController) {
         delegate?.presentError(error, from: viewController)
     }
 }

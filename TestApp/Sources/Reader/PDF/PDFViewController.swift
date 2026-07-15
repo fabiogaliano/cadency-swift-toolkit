@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -21,8 +21,7 @@ final class PDFViewController: VisualReaderViewController<PDFNavigatorViewContro
         bookmarks: BookmarkRepository,
         highlights: HighlightRepository,
         initialPreferences: PDFPreferences,
-        preferencesStore: AnyUserPreferencesStore<PDFPreferences>,
-        httpServer: HTTPServer
+        preferencesStore: AnyUserPreferencesStore<PDFPreferences>
     ) throws {
         self.preferencesStore = preferencesStore
 
@@ -31,8 +30,7 @@ final class PDFViewController: VisualReaderViewController<PDFNavigatorViewContro
             initialLocation: locator,
             config: PDFNavigatorViewController.Configuration(
                 preferences: initialPreferences
-            ),
-            httpServer: httpServer
+            )
         )
 
         super.init(navigator: navigator, publication: publication, bookId: bookId, books: books, bookmarks: bookmarks, highlights: highlights)

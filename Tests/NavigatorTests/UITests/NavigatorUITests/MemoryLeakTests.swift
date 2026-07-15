@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -21,25 +21,25 @@ final class MemoryLeakTests: XCTestCase {
         app.launch()
     }
 
-    func testEPUBNavigatorDeallocatesAfterClosing() throws {
+    func testEPUBNavigatorDeallocatesAfterClosing() {
         app
             .open(.childrensLiteratureEPUB, waitUntilReady: true)
             .close(assertMemoryDeallocated: true)
     }
 
-    func testEPUBNavigatorDeallocatesAfterClosingBeforeReady() throws {
+    func testEPUBNavigatorDeallocatesAfterClosingBeforeReady() {
         app
             .open(.childrensLiteratureEPUB, waitUntilReady: false)
             .close(assertMemoryDeallocated: true)
     }
 
-    func testPDFNavigatorDeallocatesAfterClosing() throws {
+    func testPDFNavigatorDeallocatesAfterClosing() {
         app
             .open(.daisyPDF, waitUntilReady: true)
             .close(assertMemoryDeallocated: true)
     }
 
-    func testPDFNavigatorDeallocatesAfterClosingBeforeReady() throws {
+    func testPDFNavigatorDeallocatesAfterClosingBeforeReady() {
         app
             .open(.daisyPDF, waitUntilReady: false)
             .close(assertMemoryDeallocated: true)

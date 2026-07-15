@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -20,7 +20,7 @@ class TDMTests: XCTestCase {
             try? TDM(json: [
                 "reservation": "all",
                 "policy": "https://policy",
-            ] as [String: Any]),
+            ] as JSONValue),
             TDM(
                 reservation: .all,
                 policy: HTTPURL(string: "https://policy")
@@ -35,22 +35,22 @@ class TDMTests: XCTestCase {
     }
 
     func testGetMinimalJSON() {
-        AssertJSONEqual(
-            TDM(reservation: .none).json,
+        XCTAssertEqual(
+            TDM(reservation: .none).jsonObject,
             ["reservation": "none"]
         )
     }
 
     func testGetFullJSON() {
-        AssertJSONEqual(
+        XCTAssertEqual(
             TDM(
                 reservation: .all,
                 policy: HTTPURL(string: "https://policy")
-            ).json,
+            ).jsonObject,
             [
                 "reservation": "all",
                 "policy": "https://policy",
-            ] as [String: Any]
+            ] as [String: JSONValue]
         )
     }
 }

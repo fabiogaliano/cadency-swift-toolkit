@@ -10,10 +10,6 @@ Sources/Navigator/EPUB/Assets/Static/scripts/*.js.map
 .swiftpm/
 Package.resolved
 
-# Carthage
-./Carthage/
-Cartfile.resolved
-
 # Xcode
 
 ## User settings
@@ -60,3 +56,10 @@ playground.xcworkspace
 ## IntelliJ
 out/
 
+## Claude Code
+.claude/agent-memory
+.claude/settings.local.json
+
+# DocC generation
+.build-docs
+docs-site

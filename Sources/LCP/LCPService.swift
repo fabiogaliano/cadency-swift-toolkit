@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -19,14 +19,24 @@ import UIKit
 /// when presenting a dialog, for example.
 public final class LCPService: Loggable {
     private let licenses: LicensesService
+    private let passphrases: PassphrasesService
     private let assetRetriever: AssetRetriever
 
-    /// - Parameter deviceName: Device name used when registering a license to an LSD server.
-    ///   If not provided, the device name will be the default `UIDevice.current.name`.
-    /// - Parameter deviceId: Device ID used when registering a license to an LSD server.
-    ///   You must ensure the identifier is unique and stable for the device (persist and
-    ///   reuse across app launches). If not provided, the device ID will be generated as
-    ///   a random UUID.
+    /// - Parameters:
+    ///   - client: The LCP client used for core license operations.
+    ///   - licenseRepository: Repository for managing stored licenses.
+    ///   - passphraseRepository: Repository for managing user passphrases.
+    ///   - assetRetriever: The retriever used to fetch protected assets.
+    ///   - httpClient: The HTTP client used for network requests to LSD/LCP servers.
+    ///   - deviceName: Device name used when registering a license to an LSD server.
+    ///     If not provided, the device name will be `UIDevice.current.name`. Since iOS 16,
+    ///     this returns a generic name (e.g. "iPhone") unless the
+    ///     `com.apple.developer.device-information.user-assigned-device-name` entitlement
+    ///     is added to your app.
+    ///   - deviceId: Device ID used when registering a license to an LSD server.
+    ///     You must ensure the identifier is unique and stable for the device (persist and
+    ///     reuse across app launches). If not provided, the device ID will be generated as
+    ///     a random UUID.
     public init(
         client: LCPClient,
         licenseRepository: LCPLicenseRepository,
@@ -36,20 +46,12 @@ public final class LCPService: Loggable {
         deviceName: String? = nil,
         deviceId: String? = nil
     ) {
-        // Determine whether the embedded liblcp.a is in production mode, by attempting to open a production license.
-        let isProduction: Bool = {
-            guard
-                let prodLicenseURL = Bundle.module.url(forResource: "prod-license", withExtension: "lcpl"),
-                let prodLicense = try? String(contentsOf: prodLicenseURL, encoding: .utf8)
-            else {
-                return false
-            }
-            let passphrase = "7B7602FEF5DEDA10F768818FFACBC60B173DB223B7E66D8B2221EBE2C635EFAD" // "One passphrase"
-            return client.findOneValidPassphrase(jsonLicense: prodLicense, hashedPassphrases: [passphrase]) == passphrase
-        }()
+        let passphrases = PassphrasesService(
+            client: client,
+            repository: passphraseRepository
+        )
 
         licenses = LicensesService(
-            isProduction: isProduction,
             client: client,
             licenses: licenseRepository,
             crl: CRLService(httpClient: httpClient),
@@ -61,13 +63,37 @@ public final class LCPService: Loggable {
             ),
             assetRetriever: assetRetriever,
             httpClient: httpClient,
-            passphrases: PassphrasesService(
-                client: client,
-                repository: passphraseRepository
-            )
+            passphrases: passphrases
         )
 
+        self.passphrases = passphrases
         self.assetRetriever = assetRetriever
+    }
+
+    /// Stores an LCP passphrase candidate in the repository, without
+    /// associating it with a specific license. Useful to preload a passphrase
+    /// ahead of time.
+    ///
+    /// - Parameters:
+    ///   - passphrase: The passphrase to store.
+    ///   - isHashed: Whether `passphrase` is already a SHA-256 hash. If
+    ///     `false`, it is hashed before being stored.
+    ///   - userID: The user identifier this passphrase is associated with, if
+    ///     known.
+    ///   - provider: The license provider this passphrase is associated with,
+    ///     if known.
+    public func addPassphrase(
+        _ passphrase: String,
+        isHashed: Bool,
+        userID: User.ID? = nil,
+        provider: LicenseDocument.Provider? = nil
+    ) async throws(LCPAddPassphraseError) {
+        try await passphrases.addPassphrase(
+            passphrase,
+            isHashed: isHashed,
+            userID: userID,
+            provider: provider
+        )
     }
 
     /// Acquires a protected publication from an LCPL.
@@ -95,14 +121,15 @@ public final class LCPService: Loggable {
     /// Opens the LCP license of a protected publication, to access its DRM
     /// metadata and decipher its content.
     ///
-    /// If the updated license cannot be stored into the ``Asset``, you'll get
+    /// If the updated license cannot be stored into the `Asset`, you'll get
     /// an exception if the license points to a LSD server that cannot be
     /// reached, for instance because no Internet gateway is available.
     ///
-    /// Updated licenses can currently be stored only into ``Asset``s whose
+    /// Updated licenses can currently be stored only into `Asset`s whose
     /// source property points to a `file://` URL.
     ///
     /// - Parameters:
+    ///   - asset: The asset whose license is to be retrieved.
     ///   - authentication: Used to retrieve the user passphrase if it is not
     ///     already known. The request will be cancelled if no passphrase is
     ///     found in the LCP passphrase storage and in the given

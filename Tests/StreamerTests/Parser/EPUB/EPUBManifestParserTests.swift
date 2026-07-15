@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -21,7 +21,7 @@ class EPUBManifestParserTests: XCTestCase {
 
         XCTAssertEqual(
             manifest,
-            Manifest(
+            try Manifest(
                 metadata: Metadata(
                     identifier: "urn:uuid:7408D53A-5383-40AA-8078-5256C872AE41",
                     conformsTo: [.epub],
@@ -46,39 +46,39 @@ class EPUBManifestParserTests: XCTestCase {
                     description: "The book description.",
                     numberOfPages: 42,
                     otherMetadata: [
-                        "http://purl.org/dc/terms/source": [
-                            "Feedbooks",
-                            [
-                                "@value": "Web",
-                                "http://my.url/#scheme": "http",
-                            ],
-                            "Internet",
-                        ] as [Any],
-                        "http://purl.org/dc/terms/rights": "Public Domain",
-                        "http://idpf.org/epub/vocab/package/#type": "article",
-                        "http://my.url/#customProperty": [
-                            "@value": "Custom property",
-                            "http://my.url/#refine1": "Refine 1",
-                            "http://my.url/#refine2": "Refine 2",
-                        ],
-                        "http://purl.org/dc/terms/format": "application/epub+zip",
-                        "http://www.idpf.org/vocab/rendition/#flow": "scrolled-doc",
-                        "http://www.idpf.org/vocab/rendition/#orientation": "landscape",
-                        "http://www.idpf.org/vocab/rendition/#spread": "both",
+                        "http://purl.org/dc/terms/source": .array([
+                            .string("Feedbooks"),
+                            .object([
+                                "@value": .string("Web"),
+                                "http://my.url/#scheme": .string("http"),
+                            ]),
+                            .string("Internet"),
+                        ]),
+                        "http://purl.org/dc/terms/rights": .string("Public Domain"),
+                        "http://idpf.org/epub/vocab/package/#type": .string("article"),
+                        "http://my.url/#customProperty": .object([
+                            "@value": .string("Custom property"),
+                            "http://my.url/#refine1": .string("Refine 1"),
+                            "http://my.url/#refine2": .string("Refine 2"),
+                        ]),
+                        "http://purl.org/dc/terms/format": .string("application/epub+zip"),
+                        "http://www.idpf.org/vocab/rendition/#flow": .string("scrolled-doc"),
+                        "http://www.idpf.org/vocab/rendition/#orientation": .string("landscape"),
+                        "http://www.idpf.org/vocab/rendition/#spread": .string("both"),
                     ]
                 ),
                 readingOrder: [
-                    link(id: "titlepage", href: "EPUB/titlepage.xhtml", mediaType: .xhtml),
-                    link(id: "toc", href: "EPUB/toc.xhtml", mediaType: .xhtml),
-                    link(id: "chapter01", href: "EPUB/chapter01.xhtml", mediaType: .xhtml),
-                    link(id: "chapter02", href: "EPUB/chapter02.xhtml", mediaType: .xhtml),
+                    link(href: "EPUB/titlepage.xhtml", mediaType: .xhtml),
+                    link(href: "EPUB/toc.xhtml", mediaType: .xhtml),
+                    link(href: "EPUB/chapter01.xhtml", mediaType: .xhtml),
+                    link(href: "EPUB/chapter02.xhtml", mediaType: .xhtml),
                 ],
                 resources: [
-                    link(id: "font0", href: "EPUB/fonts/MinionPro.otf", mediaType: MediaType("application/vnd.ms-opentype")!),
-                    link(id: "nav", href: "EPUB/nav.xhtml", mediaType: .xhtml, rels: [.contents]),
-                    link(id: "css", href: "EPUB/style.css", mediaType: .css),
-                    link(id: "img01a", href: "EPUB/images/alice01a.gif", mediaType: .gif, rels: [.cover]),
-                    link(id: "img02a", href: "EPUB/images/alice02a.gif", mediaType: .gif),
+                    link(href: "EPUB/fonts/MinionPro.otf", mediaType: XCTUnwrap(MediaType("application/vnd.ms-opentype"))),
+                    link(href: "EPUB/nav.xhtml", mediaType: .xhtml, rels: [.contents]),
+                    link(href: "EPUB/style.css", mediaType: .css),
+                    link(href: "EPUB/images/alice01a.gif", mediaType: .gif, rels: [.cover]),
+                    link(href: "EPUB/images/alice02a.gif", mediaType: .gif),
                 ]
             )
         )
@@ -96,10 +96,10 @@ class EPUBManifestParserTests: XCTestCase {
         XCTAssertEqual(
             manifest.readingOrder,
             [
-                link(id: "titlepage", href: "EPUB/titlepage.xhtml", mediaType: .xhtml, rels: [.cover]),
-                link(id: "toc", href: "EPUB/toc.xhtml", mediaType: .xhtml, rels: [.contents]),
-                link(id: "chapter01", href: "EPUB/chapter01.xhtml", mediaType: .xhtml, rels: [.start]),
-                link(id: "chapter02", href: "EPUB/chapter02.xhtml", mediaType: .xhtml),
+                link(href: "EPUB/titlepage.xhtml", mediaType: .xhtml, rels: [.cover]),
+                link(href: "EPUB/toc.xhtml", mediaType: .xhtml, rels: [.contents]),
+                link(href: "EPUB/chapter01.xhtml", mediaType: .xhtml, rels: [.start]),
+                link(href: "EPUB/chapter02.xhtml", mediaType: .xhtml),
             ]
         )
     }
@@ -124,11 +124,13 @@ class EPUBManifestParserTests: XCTestCase {
         XCTAssertEqual(
             manifest.readingOrder,
             [
-                link(id: "titlepage", href: "EPUB/titlepage.xhtml", mediaType: .xhtml),
-                link(id: "beginpage", href: "EPUB/beginpage.xhtml", mediaType: .xhtml, rels: [.start]),
+                link(href: "EPUB/titlepage.xhtml", mediaType: .xhtml),
+                link(href: "EPUB/beginpage.xhtml", mediaType: .xhtml, rels: [.start]),
             ]
         )
     }
+
+    // MARK: - Helpers
 
     private func parser(files: [String: String]) -> EPUBManifestParser {
         EPUBManifestParser(
@@ -140,7 +142,6 @@ class EPUBManifestParserTests: XCTestCase {
     }
 
     private func link(
-        id: String? = nil,
         href: String,
         mediaType: MediaType? = nil,
         templated: Bool = false,
@@ -149,10 +150,6 @@ class EPUBManifestParserTests: XCTestCase {
         properties: Properties = .init(),
         children: [Link] = []
     ) -> Link {
-        var properties = properties.otherProperties
-        if let id = id {
-            properties["id"] = id
-        }
-        return Link(href: href, mediaType: mediaType, templated: templated, title: title, rels: rels, properties: Properties(properties), children: children)
+        Link(href: href, mediaType: mediaType, templated: templated, title: title, rels: rels, properties: properties, children: children)
     }
 }

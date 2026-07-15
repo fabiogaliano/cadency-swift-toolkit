@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -27,16 +27,16 @@ class LocalizedStringTests: XCTestCase {
     }
 
     func testParseAllowsNil() {
-        XCTAssertNil(try LocalizedString(json: nil))
+        XCTAssertNil(try LocalizedString(json: nil as JSONValue?))
     }
 
     func testGetJSON() {
-        AssertJSONEqual(
-            LocalizedString.nonlocalized("a string").json,
+        XCTAssertEqual(
+            LocalizedString.nonlocalized("a string").jsonValue,
             "a string"
         )
-        AssertJSONEqual(
-            LocalizedString.localized(["en": "a string", "fr": "une chaîne"]).json,
+        XCTAssertEqual(
+            LocalizedString.localized(["en": "a string", "fr": "une chaîne"]).jsonValue,
             ["en": "a string", "fr": "une chaîne"]
         )
     }

@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -7,8 +7,16 @@
 import Foundation
 import PDFKit
 
-protocol PDFDocumentViewDelegate: AnyObject {
+@MainActor protocol PDFDocumentViewDelegate: AnyObject {
     func pdfDocumentViewContentInset(_ pdfDocumentView: PDFDocumentView) -> UIEdgeInsets?
+
+    /// Called before PDFKit navigates to an internal link destination.
+    ///
+    /// Return false to prevent navigation.
+    func pdfDocumentView(_ pdfDocumentView: PDFDocumentView, shouldGoTo destination: PDFDestination) -> Bool
+
+    /// Called after PDFKit navigates to an internal link destination.
+    func pdfDocumentView(_ pdfDocumentView: PDFDocumentView, didGoTo destination: PDFDestination)
 }
 
 public final class PDFDocumentView: PDFView {
@@ -37,6 +45,16 @@ public final class PDFDocumentView: PDFView {
     @available(*, unavailable)
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override public func go(to destination: PDFDestination) {
+        guard documentViewDelegate?.pdfDocumentView(self, shouldGoTo: destination) ?? true else {
+            return
+        }
+
+        super.go(to: destination)
+
+        documentViewDelegate?.pdfDocumentView(self, didGoTo: destination)
     }
 
     override public func safeAreaInsetsDidChange() {

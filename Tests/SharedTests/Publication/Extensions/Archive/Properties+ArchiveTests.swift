@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -17,7 +17,7 @@ class PropertiesArchiveTests: XCTestCase {
         let sut = Properties(["https://readium.org/webpub-manifest/properties#archive": [
             "entryLength": 8273,
             "isEntryCompressed": true,
-        ] as [String: Any]])
+        ]])
 
         XCTAssertEqual(sut.archive, Properties.Archive(entryLength: 8273, isEntryCompressed: true))
     }
@@ -42,12 +42,12 @@ class PropertiesArchiveTests: XCTestCase {
     }
 
     func testGetJSON() {
-        AssertJSONEqual(
-            Properties.Archive(entryLength: 8273, isEntryCompressed: true).json,
+        XCTAssertEqual(
+            Properties.Archive(entryLength: 8273, isEntryCompressed: true).jsonObject,
             [
                 "entryLength": 8273,
                 "isEntryCompressed": true,
-            ] as [String: Any]
+            ] as [String: JSONValue]
         )
     }
 }

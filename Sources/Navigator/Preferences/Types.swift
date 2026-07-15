@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -35,16 +35,6 @@ public enum ReadingProgression: String, Codable, Hashable {
         case .ltr: self = .ltr
         case .rtl: self = .rtl
         default: return nil
-        }
-    }
-
-    /// Returns the starting page for the reading progression.
-    var startingPage: Properties.Page {
-        switch self {
-        case .ltr:
-            return .right
-        case .rtl:
-            return .left
         }
     }
 }
@@ -224,7 +214,7 @@ public struct FontFamily: RawRepresentable, ExpressibleByStringLiteral, Codable,
     // Modern (serif)
     public static let athelas: FontFamily = "Athelas"
     public static let georgia: FontFamily = "Georgia"
-    // Neutral (sans)
+    /// Neutral (sans)
     public static let helveticaNeue: FontFamily = "Helvetica Neue"
     // Humanist (sans)
     public static let seravek: FontFamily = "Seravek"

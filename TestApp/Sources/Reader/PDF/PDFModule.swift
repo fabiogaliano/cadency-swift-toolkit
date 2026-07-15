@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -39,8 +39,7 @@ final class PDFModule: ReaderFormatModule {
             bookmarks: bookmarks,
             highlights: highlights,
             initialPreferences: preferencesStore.preferences(for: bookId),
-            preferencesStore: preferencesStore,
-            httpServer: readium.httpServer
+            preferencesStore: preferencesStore
         )
         viewController.moduleDelegate = delegate
         return viewController

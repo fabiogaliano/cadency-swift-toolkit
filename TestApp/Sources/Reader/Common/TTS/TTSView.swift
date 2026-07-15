@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -95,7 +95,7 @@ struct TTSSettings: View {
         .navigationViewStyle(.stack)
     }
 
-    @ViewBuilder private func picker<T: Hashable>(
+    private func picker<T: Hashable>(
         caption: String,
         for keyPath: WritableKeyPath<Config, T>,
         choices: [T],

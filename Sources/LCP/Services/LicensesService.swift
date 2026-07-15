@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -8,13 +8,12 @@ import Foundation
 import ReadiumShared
 
 final class LicensesService: Loggable {
-    // Mapping between an unprotected format to the matching LCP protected format.
+    /// Mapping between an unprotected format to the matching LCP protected format.
     private let mediaTypesMapping: [MediaType: MediaType] = [
         .readiumAudiobook: .lcpProtectedAudiobook,
         .pdf: .lcpProtectedPDF,
     ]
 
-    private let isProduction: Bool
     private let client: LCPClient
     private let licenses: LCPLicenseRepository
     private let crl: CRLService
@@ -24,7 +23,6 @@ final class LicensesService: Loggable {
     private let passphrases: PassphrasesService
 
     init(
-        isProduction: Bool,
         client: LCPClient,
         licenses: LCPLicenseRepository,
         crl: CRLService,
@@ -33,7 +31,6 @@ final class LicensesService: Loggable {
         httpClient: HTTPClient,
         passphrases: PassphrasesService
     ) {
-        self.isProduction = isProduction
         self.client = client
         self.licenses = licenses
         self.crl = crl
@@ -89,7 +86,6 @@ final class LicensesService: Loggable {
             authentication: authentication,
             allowUserInteraction: allowUserInteraction,
             sender: sender,
-            isProduction: isProduction,
             client: client,
             crl: crl,
             device: device,
@@ -138,7 +134,7 @@ final class LicensesService: Loggable {
         _ license: LicenseDocument,
         in url: FileURL
     ) async throws {
-        let _ = try await injectLicenseAndGetFormat(license, in: url, mediaTypeHint: nil)
+        _ = try await injectLicenseAndGetFormat(license, in: url, mediaTypeHint: nil)
     }
 
     private func injectLicenseAndGetFormat(

@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -27,10 +27,11 @@ public struct RWPMFormatSniffer: FormatSniffer {
             return .success(nil)
         }
 
-        return await blob.readAsJSON()
-            .map {
+        return await blob.read()
+            .asJSONObjectValue()
+            .map { json in
                 guard
-                    let json = $0,
+                    let json = json,
                     let manifest = try? Manifest(json: json)
                 else {
                     return nil

@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -226,7 +226,10 @@ extension CGPDFDocument: PDFDocument {
 }
 
 /// Creates a `PDFDocument` using Core Graphics.
+@available(*, deprecated, renamed: "PDFKitPDFDocumentFactory", message: "The PDFKitPDFDocumentFactory is more capable")
 public class CGPDFDocumentFactory: PDFDocumentFactory, Loggable {
+    public init() {}
+
     public func open(file: FileURL, password: String?) async throws -> PDFDocument {
         guard let document = CGPDFDocument(file.url as CFURL) else {
             throw PDFDocumentError.openFailed
