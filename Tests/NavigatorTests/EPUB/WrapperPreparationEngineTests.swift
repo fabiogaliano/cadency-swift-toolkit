@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -14,7 +14,6 @@ import XCTest
 /// no live WebKit needed for retry, backoff, foreground recovery, or take logic.
 @MainActor
 class WrapperPreparationEngineTests: XCTestCase {
-
     // MARK: - Helpers
 
     /// A controllable clock that records scheduled delays and lets the test fire them.
@@ -66,18 +65,6 @@ class WrapperPreparationEngineTests: XCTestCase {
         }
     }
 
-    /// Minimal HTTPServer stub — the engine only needs a non-nil reference.
-    @MainActor
-    private final class StubHTTPServer: HTTPServer {
-        nonisolated func serve(at endpoint: HTTPServerEndpoint, handler: HTTPRequestHandler) throws -> HTTPURL {
-            HTTPURL(string: "http://127.0.0.1:8080/\(endpoint)")!
-        }
-
-        nonisolated func transformResources(at endpoint: HTTPServerEndpoint, with transformer: @escaping ResourceTransformer) throws {}
-
-        nonisolated func remove(at endpoint: HTTPServerEndpoint) throws {}
-    }
-
     /// Creates a fresh engine with test seams wired up.
     @MainActor
     private func makeEngine(
@@ -97,7 +84,7 @@ class WrapperPreparationEngineTests: XCTestCase {
         } else {
             engine.testWarmUpHandler = { .pending }
         }
-        engine.httpServer = StubHTTPServer()
+        engine.isStarted = true
         return (engine, clock)
     }
 
@@ -123,10 +110,10 @@ class WrapperPreparationEngineTests: XCTestCase {
         XCTAssertFalse(engine.warmUp(), "warmUp when already ready should be a no-op")
     }
 
-    func testWarmUpIsNoOpWithoutHTTPServer() {
+    func testWarmUpIsNoOpWhenNotStarted() {
         let engine = WrapperPreparationEngine(observeAppLifecycle: false)
         engine.testWarmUpHandler = { .pending }
-        // No httpServer set
+        // start() not called
         XCTAssertFalse(engine.warmUp())
         XCTAssertFalse(engine.isWarming)
     }
@@ -153,7 +140,7 @@ class WrapperPreparationEngineTests: XCTestCase {
             results.isEmpty ? .pending : results.removeFirst()
         }
 
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
         XCTAssertEqual(engine.retryCount, 1)
 
         clock.fireLatest()
@@ -167,7 +154,7 @@ class WrapperPreparationEngineTests: XCTestCase {
         let (engine, clock) = makeEngine()
         engine.testWarmUpHandler = { .failed(reason: "test failure") }
 
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
 
         XCTAssertFalse(engine.isWarming)
         XCTAssertFalse(engine.isReady)
@@ -185,7 +172,7 @@ class WrapperPreparationEngineTests: XCTestCase {
             results.isEmpty ? .pending : results.removeFirst()
         }
 
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
         clock.fireLatest()
 
         XCTAssertEqual(engine.retryCount, 2)
@@ -204,7 +191,7 @@ class WrapperPreparationEngineTests: XCTestCase {
             results.isEmpty ? .pending : results.removeFirst()
         }
 
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
         clock.fireLatest()
         clock.fireLatest()
         XCTAssertEqual(clock.activeDelays.last, 4.0)
@@ -262,7 +249,7 @@ class WrapperPreparationEngineTests: XCTestCase {
         engine.testWarmUpHandler = { .failed(reason: "warm-up failed") }
 
         // A warm-up failure leaves a retry scheduled at the 1 s backoff.
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
         XCTAssertEqual(clock.activeDelays, [1.0])
 
         // A real open begins while that retry is still pending. Nothing is warm,
@@ -309,7 +296,7 @@ class WrapperPreparationEngineTests: XCTestCase {
         let (engine, clock) = makeEngine(preparesWebView: true)
         engine.warmUp()
         XCTAssertNil(engine.take()) // arms the overlap deferral while warming
-        engine.warmUpDidSucceed()   // success must clear it
+        engine.warmUpDidSucceed() // success must clear it
 
         _ = engine.take()
         engine.warmUp()
@@ -379,28 +366,31 @@ class WrapperPreparationEngineTests: XCTestCase {
 
     // MARK: - start()
 
-    func testStartSetsHTTPServerAndWarmsUp() {
+    func testStartMarksStartedAndWarmsUp() {
         let engine = WrapperPreparationEngine(observeAppLifecycle: false)
         engine.testWarmUpHandler = { .pending }
 
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
 
-        XCTAssertNotNil(engine.httpServer)
+        XCTAssertTrue(engine.isStarted)
         XCTAssertTrue(engine.isWarming)
     }
 
-    func testStartIsNoOpWhenAlreadyWarmingAndKeepsFirstServer() {
+    func testStartIsNoOpWhenAlreadyWarming() {
         let engine = WrapperPreparationEngine(observeAppLifecycle: false)
-        engine.testWarmUpHandler = { .pending }
-        let firstServer = StubHTTPServer()
+        var warmUpCount = 0
+        engine.testWarmUpHandler = {
+            warmUpCount += 1
+            return .pending
+        }
 
-        engine.start(httpServer: firstServer)
+        engine.start()
         XCTAssertTrue(engine.isWarming)
 
-        engine.start(httpServer: StubHTTPServer())
+        engine.start()
 
         XCTAssertTrue(engine.isWarming)
-        XCTAssertTrue((engine.httpServer as? StubHTTPServer) === firstServer)
+        XCTAssertEqual(warmUpCount, 1, "Second start while warming must not trigger another warm-up")
     }
 
     // MARK: - Constants sanity

@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -54,7 +54,6 @@ public enum WrapperPreparationConstants {
 /// exercised without live WebKit or real timers.
 @MainActor
 public final class WrapperPreparationEngine: NSObject, Loggable {
-
     // MARK: - Singleton
 
     public static let shared = WrapperPreparationEngine()
@@ -70,15 +69,38 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
         case ready
     }
 
-    var httpServer: HTTPServer?
+    /// The process-wide scheme-handler server backing every wrapper web view.
+    /// Created eagerly (cheap — no WebKit processes involved) so
+    /// ``makeWrapperWebView()`` can register it on configurations even before
+    /// ``start()`` is called. Web views can only receive a scheme handler at
+    /// creation, so the navigator's view model must register its publication
+    /// routes on this same instance for adopted wrappers to reach them.
+    let server = WebViewServer(scheme: "readium", formatSniffer: DefaultFormatSniffer())
+
+    /// Route host shared by the wrapper assets and publication resources.
+    /// A custom scheme's origin is `scheme://host`, so a single host keeps
+    /// the wrapper page and its chapter iframes same-origin
+    /// (`readium://continuous`), which the wrapper scripts rely on for
+    /// `window.parent` access.
+    public static let routePrefix = "continuous"
+
+    /// Whether ``start()`` has been called. Warm-ups are gated on it so the
+    /// engine never builds WebKit processes before the app opts in.
+    var isStarted = false
+
     var warmedWebView: WKWebView?
     private(set) var state: State = .idle
     private(set) var retryCount = 0
 
     /// Derived flags kept so the navigator and tests read the same surface as
     /// before the ``State`` refactor.
-    var isReady: Bool { state == .ready }
-    var isWarming: Bool { state == .warming }
+    var isReady: Bool {
+        state == .ready
+    }
+
+    var isWarming: Bool {
+        state == .warming
+    }
 
     private var retryToken: AnyObject?
     private var replacementToken: AnyObject?
@@ -111,8 +133,8 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
     }
 
     /// Creates a WKWebView for the wrapper. Tests replace this to avoid WebKit
-    /// process spin-up.
-    var webViewFactory: () -> WKWebView = { WrapperPreparationEngine.makeWrapperWebView() }
+    /// process spin-up. When `nil`, ``makeWrapperWebView()`` is used.
+    var webViewFactory: (() -> WKWebView)?
 
     enum TestWarmUpResult {
         case pending
@@ -145,19 +167,15 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
 
     // MARK: - Public API
 
-    /// Starts the preparation engine with the given HTTP server.
+    /// Starts the preparation engine.
     ///
-    /// Call once at app launch (from `ReadingSurfaceModule.OnCreate`). The server
-    /// reference is retained for the process lifetime — its port is pinned by
-    /// the first `serve()` call and must remain stable for the wrapper's
-    /// same-origin iframe access.
+    /// Call once at app launch (from `ReadingSurfaceModule.OnCreate`). Wrapper
+    /// resources are served by the engine's own ``server`` — no external HTTP
+    /// server is needed.
     ///
-    /// Calling again with the same server while a wrapper is warm or warming is
-    /// a no-op.
-    public func start(httpServer: HTTPServer) {
-        if self.httpServer == nil {
-            self.httpServer = httpServer
-        }
+    /// Calling again while a wrapper is warm or warming is a no-op.
+    public func start() {
+        isStarted = true
         warmUp()
     }
 
@@ -210,8 +228,9 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
     ///
     /// This is the **single factory** — the navigator never independently
     /// constructs a wrapper WebView.
-    public static func makeWrapperWebView() -> WKWebView {
+    public func makeWrapperWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(server, forURLScheme: server.scheme)
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
 
@@ -241,7 +260,7 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
         // chapter documents have no `getDecorations` / selection support and the
         // wrapper's `applyDecorationsToIframe` silently no-ops. The guard
         // ensures the main wrapper frame keeps its own `window.readium`.
-        if let reflowable = reflowableScript {
+        if let reflowable = Self.reflowableScript {
             let subframeOnly = "if (window.top !== window.self) {\n\(reflowable)\n}"
             webView.configuration.userContentController.addUserScript(
                 WKUserScript(source: subframeOnly, injectionTime: .atDocumentStart, forMainFrameOnly: false)
@@ -260,10 +279,10 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
     // MARK: - Warm-up lifecycle (internal for @testable)
 
     /// Attempts to warm up a wrapper WebView. No-op when already warm, already
-    /// warming, or when no HTTP server has been set via ``start(httpServer:)``.
+    /// warming, or when the engine hasn't been started via ``start()``.
     @discardableResult
     func warmUp() -> Bool {
-        guard state == .idle, httpServer != nil else { return false }
+        guard state == .idle, isStarted else { return false }
         state = .warming
 
         if let handler = testWarmUpHandler {
@@ -272,7 +291,7 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
                 break
             case .succeeded:
                 warmUpDidSucceed()
-            case .failed(let reason):
+            case let .failed(reason):
                 warmUpDidFail(reason: reason)
             }
             return true
@@ -288,10 +307,8 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
     /// transient).
     private func loadWrapperIntoFreshWebView() {
         guard
-            let httpServer,
             let staticAssets = Bundle.module.resourceURL?.fileURL?
-                .appendingPath("Assets/Static", isDirectory: true),
-            let assetsURL = try? httpServer.serve(at: "readium", contentsOf: staticAssets),
+            .appendingPath("Assets/Static", isDirectory: true),
             let wrapperURL = Bundle.module.url(forResource: "continuous-wrapper", withExtension: "html", subdirectory: "Assets"),
             var html = try? String(contentsOf: wrapperURL)
         else {
@@ -299,13 +316,15 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
             return
         }
 
+        let assetsURL = server.serve(directory: staticAssets, at: "\(Self.routePrefix)/assets")
+
         html = html.replacingOccurrences(of: "{{ASSETS_URL}}", with: assetsURL.string)
 
-        let webView = webViewFactory()
+        let webView = webViewFactory?() ?? makeWrapperWebView()
         webView.navigationDelegate = self
         // The wrapper only resolves absolute URLs, so the base URL's sole job is
-        // giving the page the localhost origin that chapter iframes will be
-        // served from.
+        // giving the page the `readium://continuous` origin that chapter iframes
+        // will be served from.
         webView.loadHTMLString(html, baseURL: assetsURL.url)
         warmedWebView = webView
     }

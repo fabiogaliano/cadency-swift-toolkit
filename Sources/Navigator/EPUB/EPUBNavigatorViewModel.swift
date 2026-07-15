@@ -79,6 +79,51 @@ enum EPUBScriptScope {
         }
     }
 
+    /// Creates a view model registering its routes on a shared, process-wide
+    /// `WebViewServer` instead of a private one.
+    ///
+    /// The continuous navigator adopts pre-warmed web views whose scheme
+    /// handler is the `WrapperPreparationEngine`'s server, fixed at web view
+    /// creation — WebKit forbids attaching a handler afterwards. Serving the
+    /// assets and the publication under the single `routePrefix` host also
+    /// keeps the wrapper page and its chapter iframes same-origin, which the
+    /// wrapper scripts rely on for `window.parent` access.
+    convenience init(
+        publication: Publication,
+        readingOrder: ReadingOrder,
+        config: EPUBNavigatorViewController.Configuration,
+        sharedServer server: WebViewServer,
+        routePrefix: String
+    ) {
+        let assetsDirectory = Bundle.module.resourceURL!.fileURL!
+            .appendingPath("Assets/Static", isDirectory: true)
+
+        let assetsBaseURL = server.serve(directory: assetsDirectory, at: "\(routePrefix)/assets")
+
+        self.init(
+            publication: publication,
+            readingOrder: readingOrder,
+            config: config,
+            server: server,
+            assetsBaseURL: assetsBaseURL,
+            formatSniffer: server.formatSniffer
+        )
+
+        if let url = publication.baseURL {
+            publicationBaseURL = url
+        } else {
+            let route = "\(routePrefix)/pub/\(UUID().uuidString)"
+            publicationBaseURL = server.serve(at: route) { [weak self] in
+                await self?.serve(href: $0)
+            }
+            sharedServerPublicationRoute = route
+        }
+    }
+
+    /// Publication route registered on a shared server, removed on deinit.
+    /// `nil` when the server is private to this view model and dies with it.
+    private var sharedServerPublicationRoute: String?
+
     private init(
         publication: Publication,
         readingOrder: ReadingOrder,
@@ -148,6 +193,13 @@ enum EPUBScriptScope {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+
+        if let route = sharedServerPublicationRoute {
+            let server = server
+            Task { @MainActor in
+                server.remove(at: route)
+            }
+        }
     }
 
     func url(to link: Link) -> AnyURL {

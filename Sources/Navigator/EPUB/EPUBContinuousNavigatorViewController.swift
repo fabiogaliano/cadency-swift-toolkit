@@ -1,5 +1,5 @@
 //
-//  Copyright 2025 Readium Foundation. All rights reserved.
+//  Copyright 2026 Readium Foundation. All rights reserved.
 //  Use of this source code is governed by the BSD-style license
 //  available in the top-level LICENSE file of the project.
 //
@@ -146,10 +146,14 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     public weak var delegate: EPUBContinuousNavigatorDelegate?
 
     /// The publication being rendered.
-    public var publication: Publication { viewModel.publication }
+    public var publication: Publication {
+        viewModel.publication
+    }
 
     /// Currently applied settings.
-    public var settings: EPUBSettings { viewModel.settings }
+    public var settings: EPUBSettings {
+        viewModel.settings
+    }
 
     /// Current location in the publication.
     public private(set) var currentLocation: Locator?
@@ -275,15 +279,13 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     ///   - publication: Reflowable EPUB publication to render.
     ///   - initialLocation: Starting location in the publication.
     ///   - config: Navigator configuration.
-    ///   - httpServer: HTTP server used to serve publication resources.
     /// - Throws: `Error.publicationRestricted` if the publication is DRM-protected without
     ///           proper unlocking, or `Error.fixedLayoutNotSupported` if the publication
     ///           is fixed-layout.
     public convenience init(
         publication: Publication,
         initialLocation: Locator?,
-        config: Configuration = .init(),
-        httpServer: HTTPServer
+        config: Configuration = .init()
     ) throws {
         guard !publication.isRestricted else {
             throw Error.publicationRestricted
@@ -307,10 +309,15 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         // Force scroll mode for continuous navigation
         epubConfig.preferences.scroll = true
 
-        let viewModel = try EPUBNavigatorViewModel(
+        // Publication resources must be reachable from pre-warmed web views,
+        // whose scheme handler is the engine's shared server — so the view
+        // model registers its routes there instead of on a private server.
+        let viewModel = EPUBNavigatorViewModel(
             publication: publication,
+            readingOrder: publication.readingOrder,
             config: epubConfig,
-            httpServer: httpServer
+            sharedServer: WrapperPreparationEngine.shared.server,
+            routePrefix: WrapperPreparationEngine.routePrefix
         )
 
         self.init(
@@ -331,9 +338,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     ) {
         self.viewModel = viewModel
         self.config = config
-        self.currentLocation = initialLocation
+        currentLocation = initialLocation
         self.readingOrder = readingOrder
-        self.loadPositionsByReadingOrder = positionsByReadingOrder
+        loadPositionsByReadingOrder = positionsByReadingOrder
 
         super.init(nibName: nil, bundle: nil)
 
@@ -390,7 +397,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             adoptedWarmWrapper = true
 
         } else {
-            webView = WrapperPreparationEngine.makeWrapperWebView()
+            webView = WrapperPreparationEngine.shared.makeWrapperWebView()
         }
         webView.frame = view.bounds
         webView.navigationDelegate = self
@@ -454,10 +461,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
         do {
             var html = try String(contentsOf: wrapperURL)
-            html = html.replacingOccurrences(of: "{{ASSETS_URL}}", with: viewModel.assetsURL.string)
+            html = html.replacingOccurrences(of: "{{ASSETS_URL}}", with: viewModel.assetsBaseURL.string)
 
-            log(.debug, "Loading continuous wrapper baseURL=\(viewModel.publicationBaseURL.string) assetsURL=\(viewModel.assetsURL.string)")
-
+            log(.debug, "Loading continuous wrapper baseURL=\(viewModel.publicationBaseURL.string) assetsURL=\(viewModel.assetsBaseURL.string)")
 
             webView.loadHTMLString(html, baseURL: viewModel.publicationBaseURL.url)
 
@@ -518,7 +524,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             self?.didReceiveBlockActivated(body, frameInfo: frameInfo)
         }
 
-
         for (name, _) in jsMessages {
             webView.configuration.userContentController.add(self, name: name)
         }
@@ -576,7 +581,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         guard !isWrapperLoaded else { return }
         isWrapperLoaded = true
 
-
         Task {
             await initializeWrapper()
         }
@@ -599,10 +603,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
 
         let config: [String: JSONValue] = [
-            "prefetchBehind": self.config.prefetchBehind.jsonValue,
-            "prefetchAhead": self.config.prefetchAhead.jsonValue,
-            "maxMounted": self.config.maxMountedChapters.jsonValue,
-            "defaultChapterHeight": Double(self.config.defaultChapterHeight).jsonValue,
+            "prefetchBehind": config.prefetchBehind.jsonValue,
+            "prefetchAhead": config.prefetchAhead.jsonValue,
+            "maxMounted": config.maxMountedChapters.jsonValue,
+            "defaultChapterHeight": Double(config.defaultChapterHeight).jsonValue,
         ]
 
         guard
@@ -665,7 +669,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private func selectionDidChange(_ body: Any) {
         guard
             let selection = body as? [String: Any],
-            let text = try? Locator.Text(json: selection["text"])
+            let text = try? Locator.Text(json: JSONValue(selection["text"]))
         else {
             viewModel.editingActions.selection = nil
             return
@@ -681,7 +685,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         // may be a different, non-containing element. Fall back to the old
         // currentLocation-based Locator when the parse fails (e.g. a malformed
         // href, or the script omitting `locations` when no selector resolved).
-        let locator = (try? Locator(json: selection)) ?? currentLocation?.copy(text: { $0 = text })
+        let locator = (try? Locator(json: JSONValue(selection))) ?? currentLocation?.copy(text: { $0 = text })
 
         if let locator = locator {
             viewModel.editingActions.selection = Selection(
@@ -784,7 +788,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             return .failure(.init(warning: "blockActivated: payload is not a dictionary"))
         }
 
-        guard let locator = try? Locator(json: data["locator"]), !locator.href.string.isEmpty else {
+        guard let locator = try? Locator(json: JSONValue(data["locator"])), !locator.href.string.isEmpty else {
             return .failure(.init(warning: "blockActivated: could not parse a valid locator"))
         }
 
@@ -820,7 +824,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         switch data["blockKey"] {
         case .none:
             blockKey = nil
-        case .some(let rawValue) where rawValue is NSNull:
+        case let .some(rawValue) where rawValue is NSNull:
             blockKey = nil
         case let .some(rawValue):
             guard let key = rawValue as? String, !key.isEmpty else {
@@ -887,7 +891,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
                 let jsonString = value as? String,
                 let jsonData = jsonString.data(using: .utf8),
                 let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                let locator = try? Locator(json: json)
+                let locator = try? Locator(json: JSONValue(json))
             else { return }
 
             // Enrich locator with position data if available
@@ -943,7 +947,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
         guard on(.jump(normalizedLocator)) else { return false }
 
-        guard let json = normalizedLocator.jsonString else {
+        guard let json = try? normalizedLocator.jsonString() else {
             _ = on(.jumped)
             return false
         }
@@ -1003,7 +1007,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             let jsonString = value as? String,
             let jsonData = jsonString.data(using: .utf8),
             let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-            let locator = try? Locator(json: json)
+            let locator = try? Locator(json: JSONValue(json))
         else { return nil }
         return locator
     }

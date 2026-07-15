@@ -25,7 +25,7 @@ class ReadiumCSSTests: XCTestCase {
         .stylesheetLink(href: "https://readium/assets/\(folder)ReadiumCSS-after.css")
     }
 
-    // Always resolved from the assets root, regardless of the layout's stylesheet folder.
+    /// Always resolved from the assets root, regardless of the layout's stylesheet folder.
     let cadencyReader = HTMLInjection.stylesheetLink(href: "https://readium/assets/CadencyReader.css")
 
     let audioFix = HTMLInjection.style("audio[controls] { width: revert; height: revert; }")
@@ -329,6 +329,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
@@ -359,6 +360,7 @@ class ReadiumCSSTests: XCTestCase {
                 cssBefore(),
                 cssDefault(),
                 cssAfter(),
+                cadencyReader,
                 audioFix,
                 .styleAttribute(on: .html, css: ""),
                 .dirAttribute(on: .html, rtl: false),
