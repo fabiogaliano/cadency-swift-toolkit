@@ -25,6 +25,35 @@ import WebKit
         super.init()
     }
 
+    #if DEBUG
+        /// Optional handler for `[open-trace]` serve diagnostics: one line per
+        /// request (queueing delay, resource-cache hit/miss, read time, bytes)
+        /// plus cache evictions. `WrapperPreparationEngine` forwards its own
+        /// handler here so the app's existing `onDiagnostics` wiring picks
+        /// these up without changes.
+        public var diagnosticHandler: ((String) -> Void)?
+
+        /// Emits one serve trace line. `receivedAt` is the moment WebKit handed
+        /// us the scheme task; the gap to `servedAt` includes main-actor
+        /// queueing, route matching, cache lookup, and the resource read.
+        private func emitServeTrace(
+            url: URL,
+            receivedAt: Date,
+            servedAt: Date = Date(),
+            cache: String? = nil,
+            bytes: Int = 0,
+            outcome: String
+        ) {
+            guard let diagnosticHandler else { return }
+            let total = Int(servedAt.timeIntervalSince(receivedAt) * 1000)
+            let t = Int(servedAt.timeIntervalSince1970 * 1000)
+            let cachePart = cache.map { " cache=\($0)" } ?? ""
+            diagnosticHandler(
+                "[open-trace] serve t=\(t) total=\(total)ms\(cachePart) bytes=\(bytes) outcome=\(outcome) path=\(url.path)"
+            )
+        }
+    #endif
+
     // MARK: - Route registration
 
     private enum RouteHandler {
@@ -125,8 +154,9 @@ import WebKit
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
         let taskID = ObjectIdentifier(urlSchemeTask)
+        let receivedAt = Date()
         activeTasks[taskID] = Task {
-            await serve(urlSchemeTask)
+            await serve(urlSchemeTask, receivedAt: receivedAt)
             _ = activeTasks.removeValue(forKey: taskID)
         }
     }
@@ -138,7 +168,7 @@ import WebKit
 
     // MARK: - Serving
 
-    private func serve(_ urlSchemeTask: WKURLSchemeTask) async {
+    private func serve(_ urlSchemeTask: WKURLSchemeTask, receivedAt: Date) async {
         guard let requestURL = urlSchemeTask.request.url else {
             await fail(urlSchemeTask, with: URLError(.badURL))
             return
@@ -151,7 +181,7 @@ import WebKit
                 guard route.baseURL.isEquivalentTo(requestURL) else {
                     continue
                 }
-                await serveFile(urlSchemeTask, at: file, requestURL: requestURL, allowCrossOrigin: true)
+                await serveFile(urlSchemeTask, at: file, requestURL: requestURL, allowCrossOrigin: true, receivedAt: receivedAt)
                 return
 
             case let .directory(directory):
@@ -162,7 +192,7 @@ import WebKit
                 else {
                     continue
                 }
-                await serveFile(urlSchemeTask, at: file, requestURL: requestURL, allowCrossOrigin: true)
+                await serveFile(urlSchemeTask, at: file, requestURL: requestURL, allowCrossOrigin: true, receivedAt: receivedAt)
                 return
 
             case let .resources(handler):
@@ -173,12 +203,16 @@ import WebKit
                     urlSchemeTask,
                     relativeURL: relativeURL,
                     handler: handler,
-                    requestURL: requestURL
+                    requestURL: requestURL,
+                    receivedAt: receivedAt
                 )
                 return
             }
         }
 
+        #if DEBUG
+            emitServeTrace(url: requestURL, receivedAt: receivedAt, outcome: "no-route")
+        #endif
         await fail(urlSchemeTask, with: URLError(.fileDoesNotExist))
     }
 
@@ -187,31 +221,47 @@ import WebKit
         _ urlSchemeTask: WKURLSchemeTask,
         relativeURL: RelativeURL,
         handler: @MainActor (RelativeURL) async -> (Resource, MediaType)?,
-        requestURL: URL
+        requestURL: URL,
+        receivedAt: Date
     ) async {
         // Reuse a cached buffered resource to benefit from forward-seek
         // optimization and read-ahead buffering, or create and cache a new
         // one.
         let resource: Resource
         let mediaType: MediaType
+        let cacheState: String
         if let (cachedResource, cachedMediaType) = resourceCache[relativeURL] {
             resource = cachedResource
             mediaType = cachedMediaType
+            cacheState = "hit"
         } else {
             guard let (newResource, newMediaType) = await handler(relativeURL) else {
+                #if DEBUG
+                    emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: "miss", outcome: "not-found")
+                #endif
                 await fail(urlSchemeTask, with: URLError(.fileDoesNotExist))
                 return
             }
             resource = newResource.buffered(size: 256 * 1024)
             mediaType = newMediaType
-            resourceCache.set(relativeURL, resource: resource, mediaType: mediaType)
+            cacheState = "miss"
+            let evicted = resourceCache.set(relativeURL, resource: resource, mediaType: mediaType)
+            #if DEBUG
+                for url in evicted {
+                    diagnosticHandler?("[open-trace] cache-evict path=\(url.string)")
+                }
+            #else
+                _ = evicted
+            #endif
         }
 
         await serveResource(
             resource,
             with: urlSchemeTask,
             mediaType: mediaType,
-            requestURL: requestURL
+            requestURL: requestURL,
+            receivedAt: receivedAt,
+            cacheState: cacheState
         )
     }
 
@@ -224,14 +274,16 @@ import WebKit
         _ urlSchemeTask: WKURLSchemeTask,
         at file: FileURL,
         requestURL: URL,
-        allowCrossOrigin: Bool
+        allowCrossOrigin: Bool,
+        receivedAt: Date
     ) async {
         await serveResource(
             FileResource(file: file),
             with: urlSchemeTask,
             mediaType: mediaTypeFromURL(file),
             requestURL: requestURL,
-            allowCrossOrigin: allowCrossOrigin
+            allowCrossOrigin: allowCrossOrigin,
+            receivedAt: receivedAt
         )
     }
 
@@ -240,7 +292,9 @@ import WebKit
         with urlSchemeTask: WKURLSchemeTask,
         mediaType: MediaType?,
         requestURL: URL,
-        allowCrossOrigin: Bool = false
+        allowCrossOrigin: Bool = false,
+        receivedAt: Date,
+        cacheState: String? = nil
     ) async {
         // Try to serve a byte range if the client requested one and the
         // resource length is known.
@@ -251,6 +305,9 @@ import WebKit
             let result = await resource.read(range: range)
             switch result {
             case let .success(data):
+                #if DEBUG
+                    emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: data.count, outcome: "206")
+                #endif
                 await respond(urlSchemeTask, with: data, range: range, totalLength: totalLength, mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
             case let .failure(error):
                 log(.error, "Failed to read resource \(requestURL.path) range \(range): \(error)")
@@ -263,6 +320,9 @@ import WebKit
         let result = await resource.read()
         switch result {
         case let .success(data):
+            #if DEBUG
+                emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: data.count, outcome: "200")
+            #endif
             await respond(urlSchemeTask, with: data, range: nil, totalLength: UInt64(data.count), mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
         case let .failure(error):
             log(.error, "Failed to read resource \(requestURL.path): \(error)")
@@ -369,16 +429,21 @@ private struct BoundedResourceCache {
         entries[key]
     }
 
-    mutating func set(_ key: RelativeURL, resource: Resource, mediaType: MediaType) {
+    /// - Returns: The keys evicted to make room, for diagnostics.
+    @discardableResult
+    mutating func set(_ key: RelativeURL, resource: Resource, mediaType: MediaType) -> [RelativeURL] {
         if entries[key] == nil {
             order.append(key)
         }
         entries[key] = (resource, mediaType)
 
+        var evictedKeys: [RelativeURL] = []
         while order.count > capacity {
             let evicted = order.removeFirst()
             entries.removeValue(forKey: evicted)
+            evictedKeys.append(evicted)
         }
+        return evictedKeys
     }
 
     mutating func remove(where predicate: (RelativeURL, MediaType) -> Bool) {

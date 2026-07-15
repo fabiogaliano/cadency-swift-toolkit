@@ -435,11 +435,20 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     private func initialize() async {
+        #if DEBUG
+            let positionsStart = Date().timeIntervalSince1970 * 1000
+        #endif
         do {
             positionsByReadingOrder = try await loadPositionsByReadingOrder().get()
         } catch {
             log(.error, DebugError("Failed to load positions.", cause: error))
         }
+        #if DEBUG
+            let positionsEnd = Date().timeIntervalSince1970 * 1000
+            diagnosticHandler?(
+                "[open-trace] positionsLoaded t=\(Int(positionsEnd)) dt=\(Int(positionsEnd - positionsStart))ms resources=\(positionsByReadingOrder.count)"
+            )
+        #endif
 
         if adoptedWarmWrapper {
             // The pre-warmed page already finished loading and passed the wrapper

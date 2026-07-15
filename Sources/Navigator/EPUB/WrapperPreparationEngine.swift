@@ -421,8 +421,13 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
         /// Optional handler for diagnostic messages. `ReadingSurfaceView` sets
         /// this (DEBUG only) to forward engine diagnostics to the JS diagnostics
         /// event; the engine is a singleton, so the most recently mounted view
-        /// wins.
-        public var diagnosticHandler: ((String) -> Void)?
+        /// wins. Forwarded to the shared `server` so its serve traces reach the
+        /// same channel without additional app wiring.
+        public var diagnosticHandler: ((String) -> Void)? {
+            didSet {
+                server.diagnosticHandler = diagnosticHandler
+            }
+        }
 
         private func diagnosticLog(_ message: String) {
             let msg = "[WrapperPreparationEngine] \(message)"
