@@ -9,6 +9,7 @@
 
 import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
+import { findSpineIndexByHref, offsetInChapter } from "./navigation-target";
 import { chapterProgression, mostVisibleChapter } from "./visible-locator";
 
 // Polyfill for ResizeObserver on older iOS versions
@@ -870,30 +871,13 @@ const pendingNavigation = createPendingNavigation({
 function goTo(locator) {
   if (!locator) return false;
 
-  // Find the target chapter by href
-  const href = locator.href || "";
-  let targetIndex = -1;
+  const href = (locator.href || "").split("#")[0];
+  let targetIndex = findSpineIndexByHref(spineItems, href);
 
-  for (let i = 0; i < spineItems.length; i++) {
-    const item = spineItems[i];
-    if (
-      item.href === href ||
-      href.endsWith(item.href) ||
-      item.href.endsWith(href)
-    ) {
-      targetIndex = i;
-      break;
-    }
-  }
-
-  if (targetIndex === -1) {
+  if (targetIndex === -1 && href) {
     // Try to find by URL
     for (let i = 0; i < spineItems.length; i++) {
-      if (
-        spineItems[i].url &&
-        locator.href &&
-        spineItems[i].url.includes(locator.href)
-      ) {
+      if (spineItems[i].url && spineItems[i].url.includes(href)) {
         targetIndex = i;
         break;
       }
@@ -918,35 +902,20 @@ function scrollToLocatorInChapter(spineIndex, locator) {
 
   try {
     const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
-
-    let offsetInChapter = 0;
-    const iframeDoc = iframe.contentDocument;
-
-    const selector = locator?.locations?.cssSelector;
-    if (selector && iframeDoc) {
-      try {
-        const element = iframeDoc.querySelector(selector);
-        if (element) {
-          offsetInChapter = element.getBoundingClientRect().top;
-        }
-      } catch (e) {
-        // Invalid selector; fall through to progression-based offset.
-      }
-    }
-
-    const progression = locator?.locations?.progression;
-    if (offsetInChapter === 0 && typeof progression === "number") {
-      const chapterHeight =
-        getIframeScrollHeight(iframe) ||
-        chapterHeights.get(spineIndex) ||
-        config.defaultChapterHeight;
-      offsetInChapter = chapterHeight * Math.max(0, Math.min(1, progression));
-    }
+    const chapterHeight =
+      getIframeScrollHeight(iframe) ||
+      chapterHeights.get(spineIndex) ||
+      config.defaultChapterHeight;
+    const offset = offsetInChapter(
+      locator,
+      iframe.contentDocument,
+      chapterHeight
+    );
 
     withProgrammaticScroll(
       () =>
         window.scrollTo({
-          top: wrapperTop + Math.max(0, offsetInChapter),
+          top: wrapperTop + Math.max(0, offset),
           behavior: "auto",
         }),
       250
@@ -1131,7 +1100,8 @@ const activableDecorationGroups = new Set();
 function decorationsForSpineIndex(decorations, spineIndex) {
   return decorations.filter(
     (decoration) =>
-      findSpineIndexByHref(decoration.locator?.href || "") === spineIndex
+      findSpineIndexByHref(spineItems, decoration.locator?.href || "") ===
+      spineIndex
   );
 }
 
@@ -1177,23 +1147,6 @@ function applyDecorationsToIframe(iframe, groupName, decorations) {
   } catch (e) {
     log("Failed to apply decorations:", e.message);
   }
-}
-
-/**
- * Find spine index by href.
- */
-function findSpineIndexByHref(href) {
-  for (let i = 0; i < spineItems.length; i++) {
-    const item = spineItems[i];
-    if (
-      item.href === href ||
-      href.endsWith(item.href) ||
-      item.href.endsWith(href)
-    ) {
-      return i;
-    }
-  }
-  return -1;
 }
 
 /**
