@@ -935,8 +935,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private func scheduleCurrentLocationUpdate() {
         pendingLocationUpdateTask?.cancel()
         pendingLocationUpdateTask = Task { [weak self] in
+            // A cancelled sleep returns immediately; without this bail the
+            // debounce degenerates into one locator round-trip per frame.
             try? await Task.sleep(nanoseconds: 200_000_000)
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             self.updateCurrentLocation()
         }
     }
