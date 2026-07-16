@@ -111,6 +111,9 @@ import WebKit
     func remove(at route: String) {
         let route = normalizedRoute(route)
         routes.removeAll { $0.path.hasPrefix(route) }
+        #if DEBUG
+            diagnosticHandler?("[lifetime] route-removed route=\(route)")
+        #endif
     }
 
     private func normalizedRoute(_ route: String, isDirectory: Bool = false) -> String {

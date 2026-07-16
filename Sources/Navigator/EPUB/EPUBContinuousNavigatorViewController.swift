@@ -212,7 +212,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private var isWrapperLoaded = false
 
     private lazy var blockDoubleTapRecognizer: UITapGestureRecognizer = {
-        let recognizer = UITapGestureRecognizer(target: self, action: #selector(didRecognizeBlockDoubleTap(_:)))
+        let recognizer = UITapGestureRecognizer(target: webKitBridge, action: #selector(WebKitBridge.didRecognizeBlockDoubleTap(_:)))
         recognizer.numberOfTapsRequired = 2
         recognizer.numberOfTouchesRequired = 1
         recognizer.allowedTouchTypes = [
@@ -369,7 +369,11 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     deinit {
+        pendingLocationUpdateTask?.cancel()
         disableJSMessages()
+        #if DEBUG
+            diagnosticHandler?("[lifetime] navigator-deinit")
+        #endif
     }
 
     // MARK: - View Lifecycle
@@ -410,7 +414,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         delegate?.navigator(self, setupUserScripts: webView.configuration.userContentController)
     }
 
-    @objc private func didRecognizeBlockDoubleTap(_ recognizer: UITapGestureRecognizer) {
+    private func didRecognizeBlockDoubleTap(_ recognizer: UITapGestureRecognizer) {
         guard recognizer.state == .ended else { return }
         // Web-view coordinates are the wrapper document's top-viewport coordinates: the wrapper
         // fills the web view and never scrolls its own viewport (chapters scroll inside it).
@@ -504,6 +508,33 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     // MARK: - JavaScript Communication
 
+    /// Retained by WebKit-owned objects in place of the navigator.
+    ///
+    /// `WKUserContentController` retains its script message handlers and
+    /// `UIGestureRecognizer` retains its targets, so registering the navigator
+    /// itself ties its lifetime to the web view's (navigator → webView →
+    /// configuration/recognizer → navigator) and makes `deinit` — where handler
+    /// removal and, transitively, the publication route removal live —
+    /// unreachable, stranding one navigator and wrapper web view per book
+    /// switch.
+    @MainActor private final class WebKitBridge: NSObject, WKScriptMessageHandler {
+        private weak var navigator: EPUBContinuousNavigatorViewController?
+
+        init(navigator: EPUBContinuousNavigatorViewController) {
+            self.navigator = navigator
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            navigator?.jsMessages[message.name]?(message.body, message.frameInfo)
+        }
+
+        @objc func didRecognizeBlockDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            navigator?.didRecognizeBlockDoubleTap(recognizer)
+        }
+    }
+
+    private lazy var webKitBridge = WebKitBridge(navigator: self)
+
     private var jsMessages: [String: (Any, WKFrameInfo) -> Void] = [:]
     private var jsMessagesEnabled = false
 
@@ -534,7 +565,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
 
         for (name, _) in jsMessages {
-            webView.configuration.userContentController.add(self, name: name)
+            webView.configuration.userContentController.add(webKitBridge, name: name)
         }
     }
 
@@ -1134,14 +1165,6 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             }
         }
         return true
-    }
-}
-
-// MARK: - WKScriptMessageHandler
-
-extension EPUBContinuousNavigatorViewController: WKScriptMessageHandler {
-    public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        jsMessages[message.name]?(message.body, message.frameInfo)
     }
 }
 
