@@ -405,8 +405,14 @@ enum EPUBScriptScope {
         // they were first served. Evict them so that any future resource load
         // (e.g. after a screen rotation) reflects the updated CSS instead of
         // the stale cached version. Non-HTML resources (images, audio, etc.)
-        // are not affected by CSS changes and can remain cached.
-        server.clearResourceCache { _, mediaType in mediaType.isHTML }
+        // are not affected by CSS changes and can remain cached. On a shared
+        // server, scope the eviction to this publication's route — another
+        // book's cached documents reflect its own CSS, not ours.
+        server.clearResourceCache { route, _, mediaType in
+            guard mediaType.isHTML else { return false }
+            guard let publicationRoute = sharedServerPublicationRoute else { return true }
+            return route.hasPrefix(publicationRoute)
+        }
 
         if commitNow {
             commitCSSChange(from: previous, to: css)

@@ -107,10 +107,12 @@ import WebKit
         return baseURL
     }
 
-    /// Removes the handler at the given route.
+    /// Removes the handler at the given route, along with the resources it
+    /// cached.
     func remove(at route: String) {
         let route = normalizedRoute(route)
         routes.removeAll { $0.path.hasPrefix(route) }
+        resourceCache.removeRoute(prefix: route)
         #if DEBUG
             diagnosticHandler?("[lifetime] route-removed route=\(route)")
         #endif
@@ -151,10 +153,19 @@ import WebKit
     /// Oldest entries are evicted when the cache exceeds its capacity.
     private var resourceCache = BoundedResourceCache()
 
+    /// Memoized bytes of static asset files (Readium CSS, fonts, wrapper
+    /// assets). Every chapter iframe re-requests the same few assets, and
+    /// each request built a fresh `FileResource` + disk read. Safe because
+    /// file routes only ever serve immutable bundle files; files that would
+    /// push the cache past its budget are served uncached.
+    private var assetDataCache: [String: (data: Data, mediaType: MediaType?)] = [:]
+    private var assetDataCacheBytes = 0
+    private let assetDataCacheBudget = 4 * 1024 * 1024
+
     /// Removes cached resources matching the given predicate, forcing them to
     /// be re-served on the next request.
-    func clearResourceCache(where predicate: (RelativeURL, MediaType) -> Bool) {
-        resourceCache.remove(where: predicate)
+    func clearResourceCache(where predicate: (_ route: String, _ href: RelativeURL, _ mediaType: MediaType) -> Bool) {
+        resourceCache.remove { key, mediaType in predicate(key.route, key.href, mediaType) }
     }
 
     // MARK: - WKURLSchemeHandler
@@ -240,7 +251,7 @@ import WebKit
         let resource: Resource
         let mediaType: MediaType
         let cacheState: String
-        if let (cachedResource, cachedMediaType) = resourceCache[cacheKey] {
+        if let (cachedResource, cachedMediaType) = resourceCache.lookup(cacheKey) {
             resource = cachedResource
             mediaType = cachedMediaType
             cacheState = "hit"
@@ -252,17 +263,13 @@ import WebKit
                 await fail(urlSchemeTask, with: URLError(.fileDoesNotExist))
                 return
             }
-            resource = newResource.buffered(size: 256 * 1024)
+            resource = newResource.buffered(size: BoundedResourceCache.bufferWindow)
             mediaType = newMediaType
             cacheState = "miss"
-            let evicted = resourceCache.set(cacheKey, resource: resource, mediaType: mediaType)
-            #if DEBUG
-                for key in evicted {
-                    diagnosticHandler?("[open-trace] cache-evict path=\(key.route)\(key.href.string)")
-                }
-            #else
-                _ = evicted
-            #endif
+            // `BufferingResource` caches the length, so the range check in
+            // the serve path below won't re-query the underlying resource.
+            let estimatedLength = await (try? resource.estimatedLength().get()).flatMap { $0 }
+            emitEvictions(resourceCache.set(cacheKey, resource: resource, mediaType: mediaType, estimatedLength: estimatedLength))
         }
 
         await serveResource(
@@ -271,11 +278,21 @@ import WebKit
             mediaType: mediaType,
             requestURL: requestURL,
             receivedAt: receivedAt,
-            cacheState: cacheState
+            cacheState: cacheState,
+            cacheKey: cacheKey
         )
     }
 
-    /// Reads a local file and sends it as a response.
+    private func emitEvictions(_ keys: [BoundedResourceCache.Key]) {
+        #if DEBUG
+            for key in keys {
+                diagnosticHandler?("[open-trace] cache-evict path=\(key.route)\(key.href.string)")
+            }
+        #endif
+    }
+
+    /// Reads a local file and sends it as a response, memoizing its bytes
+    /// for later requests.
     ///
     /// Local files are served for the static assets routes (Readium assets
     /// and font files), which publication documents load cross-origin —
@@ -287,14 +304,52 @@ import WebKit
         allowCrossOrigin: Bool,
         receivedAt: Date
     ) async {
-        await serveResource(
-            FileResource(file: file),
-            with: urlSchemeTask,
-            mediaType: mediaTypeFromURL(file),
-            requestURL: requestURL,
-            allowCrossOrigin: allowCrossOrigin,
-            receivedAt: receivedAt
-        )
+        if let cached = assetDataCache[file.string] {
+            await serveData(cached.data, with: urlSchemeTask, mediaType: cached.mediaType, requestURL: requestURL, allowCrossOrigin: allowCrossOrigin, receivedAt: receivedAt, cacheState: "hit")
+            return
+        }
+
+        let mediaType = mediaTypeFromURL(file)
+        switch await FileResource(file: file).read() {
+        case let .success(data):
+            if assetDataCacheBytes + data.count <= assetDataCacheBudget {
+                assetDataCache[file.string] = (data, mediaType)
+                assetDataCacheBytes += data.count
+            }
+            await serveData(data, with: urlSchemeTask, mediaType: mediaType, requestURL: requestURL, allowCrossOrigin: allowCrossOrigin, receivedAt: receivedAt, cacheState: "miss")
+
+        case let .failure(error):
+            log(.error, "Failed to read file \(requestURL.path): \(error)")
+            #if DEBUG
+                emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: "miss", outcome: "read-failed")
+            #endif
+            await fail(urlSchemeTask, with: URLError(.resourceUnavailable))
+        }
+    }
+
+    /// Serves in-memory bytes, honoring a byte-range request.
+    private func serveData(
+        _ data: Data,
+        with urlSchemeTask: WKURLSchemeTask,
+        mediaType: MediaType?,
+        requestURL: URL,
+        allowCrossOrigin: Bool,
+        receivedAt: Date,
+        cacheState: String
+    ) async {
+        let totalLength = UInt64(data.count)
+        if let range = urlSchemeTask.request.byteRange(in: totalLength) {
+            let chunk = Data(data[Int(range.lowerBound) ..< Int(range.upperBound)])
+            #if DEBUG
+                emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: chunk.count, outcome: "206")
+            #endif
+            await respond(urlSchemeTask, with: chunk, range: range, totalLength: totalLength, mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
+        } else {
+            #if DEBUG
+                emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: data.count, outcome: "200")
+            #endif
+            await respond(urlSchemeTask, with: data, range: nil, totalLength: totalLength, mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
+        }
     }
 
     private func serveResource(
@@ -304,7 +359,8 @@ import WebKit
         requestURL: URL,
         allowCrossOrigin: Bool = false,
         receivedAt: Date,
-        cacheState: String? = nil
+        cacheState: String? = nil,
+        cacheKey: BoundedResourceCache.Key? = nil
     ) async {
         // Try to serve a byte range if the client requested one and the
         // resource length is known.
@@ -330,6 +386,9 @@ import WebKit
         let result = await resource.read()
         switch result {
         case let .success(data):
+            if let cacheKey {
+                emitEvictions(resourceCache.recordFullServe(cacheKey, bytes: data.count))
+            }
             #if DEBUG
                 emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: data.count, outcome: "200")
             #endif
@@ -425,12 +484,14 @@ private extension URLRequest {
     }
 }
 
-/// A simple bounded FIFO cache for ``Resource`` instances.
+/// A bounded LRU cache for ``Resource`` instances.
 ///
-/// Evicts the oldest entries when the number of cached resources exceeds
-/// ``capacity``, preventing unbounded memory growth as the user navigates
-/// through chapters.
-private struct BoundedResourceCache {
+/// Lookups refresh recency and eviction is least-recently-used once the
+/// estimated retained bytes exceed the budget, so one image-heavy chapter
+/// can no longer flush the documents of the mounted window (the previous
+/// 8-entry FIFO was smaller than the window itself, up to 7 documents
+/// during normal scrolling).
+struct BoundedResourceCache {
     /// Cache entries are scoped to the route that produced them: the same
     /// publication-relative href under two routes is two distinct entries.
     struct Key: Hashable {
@@ -438,38 +499,106 @@ private struct BoundedResourceCache {
         let href: RelativeURL
     }
 
-    private let capacity = 8
-    private var entries: [Key: (Resource, MediaType)] = [:]
-    private var order: [Key] = []
+    /// Read-ahead window of the ``BufferingResource`` wrapping every cached
+    /// resource — the most a raw resource retains (full reads bypass the
+    /// buffer entirely), and the provisional cost of entries whose size
+    /// isn't known yet.
+    static let bufferWindow = 256 * 1024
 
-    subscript(key: Key) -> (Resource, MediaType)? {
-        entries[key]
+    private struct Entry {
+        let resource: Resource
+        let mediaType: MediaType
+        /// Estimated retained bytes. A raw resource (known length) retains
+        /// at most the buffer window. An unknown-length resource is
+        /// transforming (`estimatedLength()` is nil — e.g. chapter HTML with
+        /// CSS injected) and memoizes its full output, so its cost stays
+        /// provisional until the first full serve measures it.
+        var cost: Int
+        var costIsMeasured: Bool
     }
 
-    /// - Returns: The keys evicted to make room, for diagnostics.
+    private let budget: Int
+    private var entries: [Key: Entry] = [:]
+    /// Least-recently-used first.
+    private var order: [Key] = []
+    private var totalCost = 0
+
+    init(budget: Int = 8 * 1024 * 1024) {
+        self.budget = budget
+    }
+
+    mutating func lookup(_ key: Key) -> (Resource, MediaType)? {
+        guard let entry = entries[key] else { return nil }
+        touch(key)
+        return (entry.resource, entry.mediaType)
+    }
+
+    /// - Returns: The keys evicted to fit the budget, for diagnostics.
     @discardableResult
-    mutating func set(_ key: Key, resource: Resource, mediaType: MediaType) -> [Key] {
-        if entries[key] == nil {
+    mutating func set(_ key: Key, resource: Resource, mediaType: MediaType, estimatedLength: UInt64?) -> [Key] {
+        removeEntry(key)
+        let entry = Entry(
+            resource: resource,
+            mediaType: mediaType,
+            cost: estimatedLength.map { min(Int(clamping: $0), Self.bufferWindow) } ?? Self.bufferWindow,
+            costIsMeasured: estimatedLength != nil
+        )
+        entries[key] = entry
+        order.append(key)
+        totalCost += entry.cost
+        return evictOverBudget()
+    }
+
+    /// Replaces the provisional cost of a memoizing entry with the bytes its
+    /// first full serve actually produced.
+    ///
+    /// - Returns: The keys evicted to fit the budget, for diagnostics.
+    @discardableResult
+    mutating func recordFullServe(_ key: Key, bytes: Int) -> [Key] {
+        guard var entry = entries[key], !entry.costIsMeasured else { return [] }
+        totalCost += bytes - entry.cost
+        entry.cost = bytes
+        entry.costIsMeasured = true
+        entries[key] = entry
+        return evictOverBudget()
+    }
+
+    /// Removes all entries produced by routes matching the given prefix.
+    mutating func removeRoute(prefix: String) {
+        remove { key, _ in key.route.hasPrefix(prefix) }
+    }
+
+    mutating func remove(where predicate: (Key, MediaType) -> Bool) {
+        for key in order where entries[key].map({ predicate(key, $0.mediaType) }) == true {
+            removeEntry(key)
+        }
+    }
+
+    private mutating func touch(_ key: Key) {
+        if let index = order.firstIndex(of: key) {
+            order.remove(at: index)
             order.append(key)
         }
-        entries[key] = (resource, mediaType)
-
-        var evictedKeys: [Key] = []
-        while order.count > capacity {
-            let evicted = order.removeFirst()
-            entries.removeValue(forKey: evicted)
-            evictedKeys.append(evicted)
-        }
-        return evictedKeys
     }
 
-    mutating func remove(where predicate: (RelativeURL, MediaType) -> Bool) {
-        let toRemove = order.filter { key in
-            entries[key].map { predicate(key.href, $0.1) } ?? false
+    private mutating func removeEntry(_ key: Key) {
+        guard let entry = entries.removeValue(forKey: key) else { return }
+        totalCost -= entry.cost
+        order.removeAll { $0 == key }
+    }
+
+    private mutating func evictOverBudget() -> [Key] {
+        var evicted: [Key] = []
+        // The most recent entry survives even when it alone exceeds the
+        // budget: evicting what's about to be served would re-pay its
+        // transform on the very next request.
+        while totalCost > budget, order.count > 1 {
+            let key = order.removeFirst()
+            if let entry = entries.removeValue(forKey: key) {
+                totalCost -= entry.cost
+                evicted.append(key)
+            }
         }
-        for key in toRemove {
-            entries.removeValue(forKey: key)
-        }
-        order = order.filter { entries[$0] != nil }
+        return evicted
     }
 }
