@@ -71,52 +71,6 @@
       });
     }
 
-    function findChapterWrapperByHref(href) {
-      if (!href) return null;
-
-      var chapters = document.querySelectorAll('.chapter[data-href]');
-      for (var i = 0; i < chapters.length; i++) {
-        var h = chapters[i].getAttribute('data-href') || "";
-        if (h === href || href.indexOf(h) !== -1 || h.indexOf(href) !== -1) {
-          return chapters[i];
-        }
-      }
-      return null;
-    }
-
-    function getIframeScrollHeight(iframe) {
-      var doc = iframe ? iframe.contentDocument : null;
-      if (!doc) return null;
-      var bodyHeight = doc.body ? doc.body.scrollHeight : 0;
-      var docHeight = doc.documentElement ? doc.documentElement.scrollHeight : 0;
-      return Math.max(bodyHeight || 0, docHeight || 0);
-    }
-
-    function scrollToLocatorInIframe(wrapper, iframe, locator) {
-      var doc = iframe ? iframe.contentDocument : null;
-      if (!doc) return false;
-
-      var wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
-      var offset = 0;
-
-      var selector = locator && locator.locations ? locator.locations.cssSelector : null;
-      if (selector) {
-        try {
-          var el = doc.querySelector(selector);
-          if (el) offset = el.getBoundingClientRect().top;
-        } catch (e) { }
-      }
-
-      var prog = locator && locator.locations ? locator.locations.progression : null;
-      if (!offset && typeof prog === 'number') {
-        var height = getIframeScrollHeight(iframe) || wrapper.offsetHeight || 0;
-        offset = height * Math.max(0, Math.min(1, prog));
-      }
-
-      window.scrollTo({ top: wrapperTop + Math.max(0, offset), behavior: 'auto' });
-      return true;
-    }
-
     // Override APIs to avoid iframe.contentWindow.eval in the bundled output.
 
     cw.registerDecorationTemplates = function (t) {
@@ -213,29 +167,9 @@
       return { href: href, type: 'application/xhtml+xml', locations: { progression: 0 } };
     };
 
-    var originalGoTo = cw.goTo;
-    cw.goTo = function (locator) {
-      var href = locator && locator.href ? locator.href : "";
-      var wrapper = findChapterWrapperByHref(href);
-      if (!wrapper) {
-        return originalGoTo ? originalGoTo(locator) : false;
-      }
-
-      wrapper.scrollIntoView({ behavior: 'auto', block: 'start' });
-
-      var tries = 20;
-      (function attempt() {
-        var iframe = wrapper.querySelector('iframe.chapter-iframe');
-        if (iframe && getReadium(iframe)) {
-          scrollToLocatorInIframe(wrapper, iframe, locator);
-          return;
-        }
-        tries -= 1;
-        if (tries > 0) setTimeout(attempt, 100);
-      })();
-
-      return true;
-    };
+    // goTo is intentionally NOT overridden: the bundled wrapper resolves it
+    // event-driven from the iframe load (pending-navigation.js) and is
+    // eval-free, so shimming it would only reintroduce timer polling.
 
     // Apply stored state to iframes as they get mounted.
     var root = document.getElementById('chapters') || document.body;

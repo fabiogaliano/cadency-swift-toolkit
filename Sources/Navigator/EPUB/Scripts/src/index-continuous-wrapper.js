@@ -8,6 +8,7 @@
 // This orchestrates multiple chapter iframes for vertical continuous scrolling.
 
 import { log } from "./utils";
+import { createPendingNavigation } from "./pending-navigation";
 
 // Polyfill for ResizeObserver on older iOS versions
 import { ResizeObserver as ResizeObserverPolyfill } from "@juggle/resize-observer";
@@ -292,6 +293,8 @@ function onIframeLoaded(spineIndex, iframe) {
   // Show iframe
   iframe.style.opacity = "1";
 
+  pendingNavigation.chapterLoaded(spineIndex);
+
   // Decorations were already reapplied above via applyStoredSettingsToIframe;
   // this only notifies native so the mount reaches the navigator delegate.
   notifyChapterMounted(spineIndex);
@@ -320,6 +323,8 @@ function onIframeError(spineIndex) {
   webkit.messageHandlers.logError.postMessage({
     message: `Failed to load chapter at spine index ${spineIndex}`,
   });
+
+  pendingNavigation.chapterFailed(spineIndex);
 }
 
 /**
@@ -763,7 +768,11 @@ function updateMountedChapters(centerIndex) {
     if (loadedIframes.size > maxMountedDuringFastScroll) {
       const mounted = [];
       loadedIframes.forEach((_, index) => {
-        if (index < start || index > end) {
+        // Never evict a chapter a goTo is waiting on, or it would never load.
+        if (
+          (index < start || index > end) &&
+          !pendingNavigation.isTarget(index)
+        ) {
           mounted.push(index);
         }
       });
@@ -786,7 +795,8 @@ function updateMountedChapters(centerIndex) {
   // Unmount chapters outside the window (respecting maxMounted)
   const mounted = [];
   loadedIframes.forEach((_, index) => {
-    if (index < start || index > end) {
+    // Never evict a chapter a goTo is waiting on, or it would never load.
+    if ((index < start || index > end) && !pendingNavigation.isTarget(index)) {
       mounted.push(index);
     }
   });
@@ -836,6 +846,21 @@ function checkInitialLoadComplete() {
 // Navigation
 // ============================================================================
 
+const pendingNavigation = createPendingNavigation({
+  getChapterState: (spineIndex) => chapterStates.get(spineIndex),
+  mountChapter: mountChapter,
+  scrollToTarget: scrollToLocatorInChapter,
+  scrollToChapterStart: (spineIndex) => {
+    const wrapper = getChapterWrapper(spineIndex);
+    if (!wrapper) return;
+    withProgrammaticScroll(
+      () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
+      250
+    );
+  },
+  log: log,
+});
+
 /**
  * Navigate to a specific locator.
  * @param {Object} locator - Locator object with href and locations
@@ -879,85 +904,62 @@ function goTo(locator) {
     return false;
   }
 
-  // Ensure the chapter is mounted
-  mountChapter(targetIndex);
-
-  // Wait for chapter to be loaded, then scroll
-  return scrollToLocatorInChapter(targetIndex, locator);
+  return pendingNavigation.navigate(targetIndex, locator);
 }
 
 /**
- * Scroll to a locator within a specific chapter.
+ * Scroll to a locator within a loaded chapter.
  */
 function scrollToLocatorInChapter(spineIndex, locator) {
   const wrapper = getChapterWrapper(spineIndex);
-  if (!wrapper) return false;
+  const iframe = loadedIframes.get(spineIndex);
+  if (!wrapper || !iframe) return false;
 
-  const state = chapterStates.get(spineIndex);
+  try {
+    const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
 
-  if (state === "loaded") {
-    // Chapter is loaded, scroll to it
-    const iframe = loadedIframes.get(spineIndex);
-    if (iframe) {
+    let offsetInChapter = 0;
+    const iframeDoc = iframe.contentDocument;
+
+    const selector = locator?.locations?.cssSelector;
+    if (selector && iframeDoc) {
       try {
-        const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
-
-        let offsetInChapter = 0;
-        const iframeDoc = iframe.contentDocument;
-
-        const selector = locator?.locations?.cssSelector;
-        if (selector && iframeDoc) {
-          try {
-            const element = iframeDoc.querySelector(selector);
-            if (element) {
-              offsetInChapter = element.getBoundingClientRect().top;
-            }
-          } catch (e) {
-            // Invalid selector; fall through to progression-based offset.
-          }
+        const element = iframeDoc.querySelector(selector);
+        if (element) {
+          offsetInChapter = element.getBoundingClientRect().top;
         }
-
-        const progression = locator?.locations?.progression;
-        if (offsetInChapter === 0 && typeof progression === "number") {
-          const chapterHeight =
-            getIframeScrollHeight(iframe) ||
-            chapterHeights.get(spineIndex) ||
-            config.defaultChapterHeight;
-          offsetInChapter =
-            chapterHeight * Math.max(0, Math.min(1, progression));
-        }
-
-        withProgrammaticScroll(
-          () =>
-            window.scrollTo({
-              top: wrapperTop + Math.max(0, offsetInChapter),
-              behavior: "auto",
-            }),
-          250
-        );
-
-        return true;
       } catch (e) {
-        // Fallback: just scroll to chapter start
-        withProgrammaticScroll(
-          () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
-          250
-        );
-        return true;
+        // Invalid selector; fall through to progression-based offset.
       }
     }
-  } else if (state === "loading") {
-    // Wait for load and retry
-    setTimeout(() => scrollToLocatorInChapter(spineIndex, locator), 100);
+
+    const progression = locator?.locations?.progression;
+    if (offsetInChapter === 0 && typeof progression === "number") {
+      const chapterHeight =
+        getIframeScrollHeight(iframe) ||
+        chapterHeights.get(spineIndex) ||
+        config.defaultChapterHeight;
+      offsetInChapter = chapterHeight * Math.max(0, Math.min(1, progression));
+    }
+
+    withProgrammaticScroll(
+      () =>
+        window.scrollTo({
+          top: wrapperTop + Math.max(0, offsetInChapter),
+          behavior: "auto",
+        }),
+      250
+    );
+
     return true;
-  } else {
-    // Need to mount first
-    mountChapter(spineIndex);
-    setTimeout(() => scrollToLocatorInChapter(spineIndex, locator), 100);
+  } catch (e) {
+    // Fallback: just scroll to chapter start
+    withProgrammaticScroll(
+      () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
+      250
+    );
     return true;
   }
-
-  return false;
 }
 
 /**

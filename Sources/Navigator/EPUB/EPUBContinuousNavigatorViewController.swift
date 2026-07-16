@@ -606,6 +606,11 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     private func didLog(_ body: Any) {
         guard let message = body as? String else { return }
+        #if DEBUG
+            if message.hasPrefix("[goto-trace]") {
+                diagnosticHandler?(message)
+            }
+        #endif
         log(.debug, "JavaScript: \(message)")
     }
 
