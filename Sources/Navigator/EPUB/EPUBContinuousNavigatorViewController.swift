@@ -444,6 +444,11 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     private func initialize() async {
+        #if DEBUG
+            diagnosticHandler?(
+                "[open-trace] initializeStart t=\(Int(Date().timeIntervalSince1970 * 1000)) warm=\(adoptedWarmWrapper)"
+            )
+        #endif
         let loadPositions = loadPositionsByReadingOrder
         positionsTask = Task { [weak self] in
             #if DEBUG
@@ -617,7 +622,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private func didLog(_ body: Any) {
         guard let message = body as? String else { return }
         #if DEBUG
-            if message.hasPrefix("[goto-trace]") {
+            if message.hasPrefix("[goto-trace]") || message.hasPrefix("[open-trace]") {
                 diagnosticHandler?(message)
             }
         #endif
@@ -642,6 +647,11 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     private func initialChaptersDidLoad() {
+        #if DEBUG
+            diagnosticHandler?(
+                "[open-trace] initialChaptersLoaded t=\(Int(Date().timeIntervalSince1970 * 1000))"
+            )
+        #endif
         _ = on(.loaded)
     }
 
@@ -672,7 +682,21 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             return
         }
 
+        #if DEBUG
+            let spineSerialized = Date().timeIntervalSince1970 * 1000
+            diagnosticHandler?(
+                "[open-trace] spineSerialized t=\(Int(spineSerialized)) items=\(readingOrder.count) bytes=\(spineJSON.utf8.count)"
+            )
+        #endif
+
         await evaluateScript("continuousWrapper.initialize(\(spineJSON), \(configJSON));")
+
+        #if DEBUG
+            let spineInitEvaluated = Date().timeIntervalSince1970 * 1000
+            diagnosticHandler?(
+                "[open-trace] spineInitEvaluated t=\(Int(spineInitEvaluated)) dt=\(Int(spineInitEvaluated - spineSerialized))ms"
+            )
+        #endif
 
         // Register decoration templates
         let templates = self.config.decorationTemplates.reduce(into: [String: JSONValue]()) { styles, item in

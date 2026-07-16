@@ -295,6 +295,8 @@ function onIframeLoaded(spineIndex, iframe) {
   // Show iframe
   iframe.style.opacity = "1";
 
+  reportFirstVisiblePaint(spineIndex);
+
   pendingNavigation.chapterLoaded(spineIndex);
 
   // Decorations were already reapplied above via applyStoredSettingsToIframe;
@@ -303,6 +305,26 @@ function onIframeLoaded(spineIndex, iframe) {
 
   // Check if all initial chapters are loaded
   checkInitialLoadComplete();
+}
+
+// One-shot open-trace mark: first *visible* chapter iframe load + double rAF
+// (the second rAF fires only after a frame with the content has been
+// committed) = first readable paint, the open pipeline's terminal mark.
+let firstVisiblePaintReported = false;
+
+function reportFirstVisiblePaint(spineIndex) {
+  if (firstVisiblePaintReported) return;
+  const rect = getChapterWrapper(spineIndex)?.getBoundingClientRect();
+  const visible = rect && rect.top < window.innerHeight && rect.bottom > 0;
+  if (!visible) return;
+  firstVisiblePaintReported = true;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() =>
+      log(
+        `[open-trace] firstVisibleIframePainted t=${Date.now()} index=${spineIndex}`
+      )
+    )
+  );
 }
 
 /**
