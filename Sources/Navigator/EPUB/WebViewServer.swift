@@ -115,6 +115,9 @@ import WebKit
         resourceCache.removeRoute(prefix: route)
         #if DEBUG
             diagnosticHandler?("[lifetime] route-removed route=\(route)")
+            // Reachable from the Xcode console even after the diagnostics
+            // channel's host view unmounted — see the navigator-deinit sentinel.
+            print("[lifetime] route-removed route=\(route)")
         #endif
     }
 

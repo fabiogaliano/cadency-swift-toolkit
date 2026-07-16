@@ -378,6 +378,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         disableJSMessages()
         #if DEBUG
             diagnosticHandler?("[lifetime] navigator-deinit")
+            // The diagnostics channel unmounts before deinit (its closure weakly
+            // captures the host view), so console output is the only reachable
+            // readout for the leak-fix device proof.
+            print("[lifetime] navigator-deinit")
         #endif
     }
 
