@@ -135,7 +135,11 @@ import WebKit
     /// Tracks active tasks for cancellation support.
     private var activeTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    /// Bounded cache of buffered resources keyed by publication-relative URL.
+    /// Bounded cache of buffered resources keyed by route path +
+    /// publication-relative URL. The server is shared process-wide and
+    /// distinct publications routinely use identical internal paths
+    /// (e.g. `OEBPS/chapter1.xhtml`), so the relative URL alone would let
+    /// one publication's bytes answer another's request.
     ///
     /// Reusing the same ``Resource`` across requests lets compressed ZIP
     /// resources benefit from forward-seek optimization instead of
@@ -201,6 +205,7 @@ import WebKit
                 }
                 await serveResource(
                     urlSchemeTask,
+                    routePath: route.path,
                     relativeURL: relativeURL,
                     handler: handler,
                     requestURL: requestURL,
@@ -219,6 +224,7 @@ import WebKit
     /// Serves a resource from a handler callback, with caching.
     private func serveResource(
         _ urlSchemeTask: WKURLSchemeTask,
+        routePath: String,
         relativeURL: RelativeURL,
         handler: @MainActor (RelativeURL) async -> (Resource, MediaType)?,
         requestURL: URL,
@@ -227,10 +233,11 @@ import WebKit
         // Reuse a cached buffered resource to benefit from forward-seek
         // optimization and read-ahead buffering, or create and cache a new
         // one.
+        let cacheKey = BoundedResourceCache.Key(route: routePath, href: relativeURL)
         let resource: Resource
         let mediaType: MediaType
         let cacheState: String
-        if let (cachedResource, cachedMediaType) = resourceCache[relativeURL] {
+        if let (cachedResource, cachedMediaType) = resourceCache[cacheKey] {
             resource = cachedResource
             mediaType = cachedMediaType
             cacheState = "hit"
@@ -245,10 +252,10 @@ import WebKit
             resource = newResource.buffered(size: 256 * 1024)
             mediaType = newMediaType
             cacheState = "miss"
-            let evicted = resourceCache.set(relativeURL, resource: resource, mediaType: mediaType)
+            let evicted = resourceCache.set(cacheKey, resource: resource, mediaType: mediaType)
             #if DEBUG
-                for url in evicted {
-                    diagnosticHandler?("[open-trace] cache-evict path=\(url.string)")
+                for key in evicted {
+                    diagnosticHandler?("[open-trace] cache-evict path=\(key.route)\(key.href.string)")
                 }
             #else
                 _ = evicted
@@ -421,23 +428,30 @@ private extension URLRequest {
 /// ``capacity``, preventing unbounded memory growth as the user navigates
 /// through chapters.
 private struct BoundedResourceCache {
-    private let capacity = 8
-    private var entries: [RelativeURL: (Resource, MediaType)] = [:]
-    private var order: [RelativeURL] = []
+    /// Cache entries are scoped to the route that produced them: the same
+    /// publication-relative href under two routes is two distinct entries.
+    struct Key: Hashable {
+        let route: String
+        let href: RelativeURL
+    }
 
-    subscript(key: RelativeURL) -> (Resource, MediaType)? {
+    private let capacity = 8
+    private var entries: [Key: (Resource, MediaType)] = [:]
+    private var order: [Key] = []
+
+    subscript(key: Key) -> (Resource, MediaType)? {
         entries[key]
     }
 
     /// - Returns: The keys evicted to make room, for diagnostics.
     @discardableResult
-    mutating func set(_ key: RelativeURL, resource: Resource, mediaType: MediaType) -> [RelativeURL] {
+    mutating func set(_ key: Key, resource: Resource, mediaType: MediaType) -> [Key] {
         if entries[key] == nil {
             order.append(key)
         }
         entries[key] = (resource, mediaType)
 
-        var evictedKeys: [RelativeURL] = []
+        var evictedKeys: [Key] = []
         while order.count > capacity {
             let evicted = order.removeFirst()
             entries.removeValue(forKey: evicted)
@@ -447,11 +461,11 @@ private struct BoundedResourceCache {
     }
 
     mutating func remove(where predicate: (RelativeURL, MediaType) -> Bool) {
-        let toRemove = order.filter { url in
-            entries[url].map { predicate(url, $0.1) } ?? false
+        let toRemove = order.filter { key in
+            entries[key].map { predicate(key.href, $0.1) } ?? false
         }
-        for url in toRemove {
-            entries.removeValue(forKey: url)
+        for key in toRemove {
+            entries.removeValue(forKey: key)
         }
         order = order.filter { entries[$0] != nil }
     }
