@@ -128,48 +128,10 @@
       return true;
     };
 
-    cw.findFirstVisibleLocator = function () {
-      var best = null;
-      var bestVisible = 0;
-
-      var chapters = document.querySelectorAll('.chapter');
-      for (var i = 0; i < chapters.length; i++) {
-        var wrapper = chapters[i];
-        var iframe = wrapper.querySelector('iframe.chapter-iframe');
-        if (!iframe || !getReadium(iframe)) continue;
-
-        var rect = wrapper.getBoundingClientRect();
-        var vh = window.innerHeight;
-        var vt = Math.max(0, rect.top);
-        var vb = Math.min(vh, rect.bottom);
-        var visibleHeight = Math.max(0, vb - vt);
-
-        if (visibleHeight > bestVisible) {
-          bestVisible = visibleHeight;
-          best = { wrapper: wrapper, iframe: iframe };
-        }
-      }
-
-      if (!best) return null;
-
-      var href = best.wrapper.getAttribute('data-href') || "";
-      try {
-        var r = getReadium(best.iframe);
-        var loc = r && r.findFirstVisibleLocator ? r.findFirstVisibleLocator() : null;
-        if (loc) {
-          var copy = {};
-          for (var k in loc) copy[k] = loc[k];
-          copy.href = href;
-          return copy;
-        }
-      } catch (e) { }
-
-      return { href: href, type: 'application/xhtml+xml', locations: { progression: 0 } };
-    };
-
-    // goTo is intentionally NOT overridden: the bundled wrapper resolves it
-    // event-driven from the iframe load (pending-navigation.js) and is
-    // eval-free, so shimming it would only reintroduce timer polling.
+    // goTo and the findFirstVisibleLocator pair are intentionally NOT
+    // overridden: the bundled wrapper is eval-free, goTo resolves
+    // event-driven from the iframe load (pending-navigation.js), and the
+    // per-settle locator is geometric - a shim copy would shadow both.
 
     // Apply stored state to iframes as they get mounted.
     var root = document.getElementById('chapters') || document.body;

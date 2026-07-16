@@ -1041,7 +1041,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             (function () {
               try {
                 if (typeof continuousWrapper === 'undefined') return null;
-                var loc = continuousWrapper.findFirstVisibleLocator();
+                var loc = continuousWrapper.findFirstVisibleElementLocator();
                 return loc ? JSON.stringify(loc) : null;
               } catch (e) {
                 return null;

@@ -9,6 +9,7 @@
 
 import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
+import { chapterProgression, mostVisibleChapter } from "./visible-locator";
 
 // Polyfill for ResizeObserver on older iOS versions
 import { ResizeObserver as ResizeObserverPolyfill } from "@juggle/resize-observer";
@@ -1005,62 +1006,76 @@ function scrollBackward() {
 // Location Reporting
 // ============================================================================
 
-/**
- * Find the first visible locator in the current view.
- * @returns {Object|null} - Locator object or null
- */
-function findFirstVisibleLocator() {
-  // Find the most visible loaded chapter
-  let bestChapter = null;
-  let bestVisibility = 0;
-
+function loadedChapterRects() {
+  const chapters = [];
   loadedIframes.forEach((iframe, spineIndex) => {
     const wrapper = getChapterWrapper(spineIndex);
     if (!wrapper) return;
-
-    const rect = wrapper.getBoundingClientRect();
-    const viewportHeight = window.innerHeight;
-
-    // Calculate visible portion
-    const visibleTop = Math.max(0, rect.top);
-    const visibleBottom = Math.min(viewportHeight, rect.bottom);
-    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
-
-    if (visibleHeight > bestVisibility) {
-      bestVisibility = visibleHeight;
-      bestChapter = { spineIndex, iframe, wrapper, rect };
-    }
+    chapters.push({
+      spineIndex,
+      iframe,
+      rect: wrapper.getBoundingClientRect(),
+    });
   });
+  return chapters;
+}
 
-  if (!bestChapter) {
-    return null;
-  }
+/**
+ * Current reading position as a chapter-level geometric locator. Cheap
+ * enough (rect math only) to run on every scroll settle - element precision
+ * is on-demand via findFirstVisibleElementLocator, mirroring upstream's
+ * split between currentLocation and firstVisibleElementLocator().
+ * @returns {Object|null} - Locator object or null
+ */
+function findFirstVisibleLocator() {
+  const best = mostVisibleChapter(loadedChapterRects(), window.innerHeight);
+  if (!best) return null;
 
-  const { spineIndex, iframe } = bestChapter;
-  const item = spineItems[spineIndex];
+  return {
+    href: spineItems[best.spineIndex].href,
+    type: "application/xhtml+xml",
+    locations: {
+      progression: chapterProgression(best.rect),
+    },
+  };
+}
+
+/**
+ * Element-precise locator: the chapter iframe's DOM descent supplies
+ * cssSelector + text context, enriched with the geometric progression.
+ * Costs a DOM walk in the chapter - for persistence points, not per settle.
+ * @returns {Object|null} - Locator object or null
+ */
+function findFirstVisibleElementLocator() {
+  const best = mostVisibleChapter(loadedChapterRects(), window.innerHeight);
+  if (!best) return null;
+
+  const item = spineItems[best.spineIndex];
+  const progression = chapterProgression(best.rect);
 
   try {
-    // Ask the iframe for its first visible locator
-    const readium = getIframeReadium(iframe);
+    const readium = getIframeReadium(best.iframe);
     const iframeLocator = readium?.findFirstVisibleLocator?.();
 
     if (iframeLocator) {
-      // Adjust the locator href to be the actual resource href
       return {
         ...iframeLocator,
         href: item.href,
+        locations: {
+          ...iframeLocator.locations,
+          progression,
+        },
       };
     }
   } catch (e) {
-    // Fallback: return chapter-level locator
+    // Iframe not ready; fall through to the geometric locator.
   }
 
-  // Fallback locator at chapter level
   return {
     href: item.href,
     type: "application/xhtml+xml",
     locations: {
-      progression: 0,
+      progression,
     },
   };
 }
@@ -1276,6 +1291,7 @@ global.continuousWrapper = {
 
   // Location and interaction
   findFirstVisibleLocator: findFirstVisibleLocator,
+  findFirstVisibleElementLocator: findFirstVisibleElementLocator,
   activateBlockAtPoint: activateBlockAtPoint,
 
   // Decorations
