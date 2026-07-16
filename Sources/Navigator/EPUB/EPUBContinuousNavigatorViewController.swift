@@ -206,7 +206,11 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private let config: Configuration
     private let readingOrder: [Link]
     private let loadPositionsByReadingOrder: () async -> ReadResult<[[Locator]]>
-    private var positionsByReadingOrder: [[Locator]] = []
+
+    /// Positions are consumed only by the scroll-settle locator enrichment, so the
+    /// load runs concurrently with spine init instead of blocking the open; the
+    /// consumer awaits the task (worst case: the first settle enriches late).
+    private var positionsTask: Task<[[Locator]], Never>?
 
     private var webView: WKWebView!
     private var isWrapperLoaded = false
@@ -370,6 +374,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     deinit {
         pendingLocationUpdateTask?.cancel()
+        positionsTask?.cancel()
         disableJSMessages()
         #if DEBUG
             diagnosticHandler?("[lifetime] navigator-deinit")
@@ -439,20 +444,25 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     private func initialize() async {
-        #if DEBUG
-            let positionsStart = Date().timeIntervalSince1970 * 1000
-        #endif
-        do {
-            positionsByReadingOrder = try await loadPositionsByReadingOrder().get()
-        } catch {
-            log(.error, DebugError("Failed to load positions.", cause: error))
+        let loadPositions = loadPositionsByReadingOrder
+        positionsTask = Task { [weak self] in
+            #if DEBUG
+                let positionsStart = Date().timeIntervalSince1970 * 1000
+            #endif
+            var positions: [[Locator]] = []
+            do {
+                positions = try await loadPositions().get()
+            } catch {
+                self?.log(.error, DebugError("Failed to load positions.", cause: error))
+            }
+            #if DEBUG
+                let positionsEnd = Date().timeIntervalSince1970 * 1000
+                self?.diagnosticHandler?(
+                    "[open-trace] positionsLoaded t=\(Int(positionsEnd)) dt=\(Int(positionsEnd - positionsStart))ms resources=\(positions.count)"
+                )
+            #endif
+            return positions
         }
-        #if DEBUG
-            let positionsEnd = Date().timeIntervalSince1970 * 1000
-            diagnosticHandler?(
-                "[open-trace] positionsLoaded t=\(Int(positionsEnd)) dt=\(Int(positionsEnd - positionsStart))ms resources=\(positionsByReadingOrder.count)"
-            )
-        #endif
 
         if adoptedWarmWrapper {
             // The pre-warmed page already finished loading and passed the wrapper
@@ -943,7 +953,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             var enrichedLocator = locator
             if
                 let index = readingOrder.firstIndexWithHREF(locator.href),
-                let positions = positionsByReadingOrder.getOrNil(index),
+                let positions = await positionsTask?.value.getOrNil(index),
                 !positions.isEmpty
             {
                 let progression = locator.locations.progression ?? 0
