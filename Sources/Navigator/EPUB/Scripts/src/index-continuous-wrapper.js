@@ -9,8 +9,10 @@
 
 import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
+import { createLandingCorrection } from "./landing-correction";
 import { findSpineIndexByHref, offsetInChapter } from "./navigation-target";
 import {
+  chapterAtViewportTop,
   chapterProgression,
   mostVisibleChapter,
   visibleWindowInChapter,
@@ -282,6 +284,7 @@ function onIframeLoaded(spineIndex, iframe) {
 
   // Setup height observation
   setupIframeHeightObserver(spineIndex, iframe);
+  setupIframeUserInputCancellation(iframe);
 
   // Inject link info into iframe
   const item = spineItems[spineIndex];
@@ -675,6 +678,30 @@ function setupVisibilityObserver() {
 /**
  * Setup scroll listener for progression updates.
  */
+function cancelLandingCorrectionFromUserInput() {
+  programmaticScrollUntil = 0;
+  landingCorrection.cancel();
+}
+
+function setupIframeUserInputCancellation(iframe) {
+  const doc = iframe.contentDocument;
+  if (!doc) return;
+  const options = { capture: true, passive: true };
+  for (const eventName of [
+    "pointerdown",
+    "touchstart",
+    "mousedown",
+    "wheel",
+    "keydown",
+  ]) {
+    doc.addEventListener(
+      eventName,
+      cancelLandingCorrectionFromUserInput,
+      options
+    );
+  }
+}
+
 function setupScrollListener() {
   let ticking = false;
 
@@ -689,9 +716,13 @@ function setupScrollListener() {
     }
   }
 
+  window.addEventListener("pointerdown", cancelLandingCorrectionFromUserInput, {
+    passive: true,
+  });
   window.addEventListener(
     "touchstart",
     (e) => {
+      cancelLandingCorrectionFromUserInput();
       const t = e.touches && e.touches[0];
       maybeSuppressAnchoringFromClientX(t?.clientX);
     },
@@ -701,10 +732,17 @@ function setupScrollListener() {
   window.addEventListener(
     "mousedown",
     (e) => {
+      cancelLandingCorrectionFromUserInput();
       maybeSuppressAnchoringFromClientX(e.clientX);
     },
     { passive: true }
   );
+  window.addEventListener("wheel", cancelLandingCorrectionFromUserInput, {
+    passive: true,
+  });
+  window.addEventListener("keydown", cancelLandingCorrectionFromUserInput, {
+    passive: true,
+  });
 
   window.addEventListener("scroll", () => {
     if (!ticking) {
@@ -777,6 +815,16 @@ function onActiveChapterChanged(spineIndex) {
  * Update which chapters are mounted based on the active chapter.
  */
 function updateMountedChapters(centerIndex) {
+  // pendingNavigation's eviction protection ends the moment the goTo scroll
+  // resolves — exactly when chapter heights start collapsing and reinflating.
+  // A transient collapse drags the viewport up, the IntersectionObserver
+  // recenters on an early chapter, and the just-landed target gets evicted,
+  // killing the landing correction mid-settle (the cold-restore-to-titlepage
+  // race). While a correction is active, keep the window centered on its
+  // target instead of the momentarily-visible chapter.
+  const correctionTarget = landingCorrection.targetIndex();
+  if (correctionTarget != null) centerIndex = correctionTarget;
+
   const start = Math.max(0, centerIndex - config.prefetchBehind);
   const end = Math.min(
     spineItems.length - 1,
@@ -944,60 +992,26 @@ function resolveScrollTarget(spineIndex, locator) {
   return Math.min(wrapperTop + Math.max(0, offset), maxScroll);
 }
 
-let landingCorrection = null;
-
-function cancelLandingCorrection() {
-  if (landingCorrection != null) {
-    cancelAnimationFrame(landingCorrection.rafId);
-    landingCorrection = null;
-  }
-}
-
-/**
- * A one-shot goTo scroll races the geometry it targets: chapter heights are
- * corrected asynchronously right after mount, and WebKit clamps a scroll
- * issued against the stale, smaller document — cold restore used to land at
- * the chapter start this way. Re-resolve the target and re-scroll each frame
- * until the landing sticks, bounded, aborting as soon as the user scrolls.
- */
-function scheduleLandingCorrection(spineIndex, locator) {
-  cancelLandingCorrection();
-  const state = { framesLeft: 90, rafId: 0 };
-  landingCorrection = state;
-
-  const check = () => {
-    if (landingCorrection !== state) return;
-    if (isUserScrolling) {
-      landingCorrection = null;
-      return;
-    }
-    state.framesLeft -= 1;
-
-    const target = resolveScrollTarget(spineIndex, locator);
-    if (target == null) {
-      landingCorrection = null;
-      return;
-    }
-    const drift = Math.abs(window.scrollY - target);
-    if (drift > 1) {
-      withProgrammaticScroll(
-        () => window.scrollTo({ top: target, behavior: "auto" }),
-        250
-      );
-    }
-    if (state.framesLeft <= 0) {
-      if (drift > 1) {
-        log(
-          `[goto-trace] landingCorrectionExhausted drift=${Math.round(drift)}`
-        );
-      }
-      landingCorrection = null;
-      return;
-    }
-    state.rafId = requestAnimationFrame(check);
-  };
-  state.rafId = requestAnimationFrame(check);
-}
+// A one-shot goTo scroll races asynchronously corrected chapter heights.
+// Re-resolve each frame until the landing sticks, bounded. Direct input in
+// either the wrapper or a chapter iframe cancels before it can re-scroll.
+const landingCorrection = createLandingCorrection({
+  resolveTarget: resolveScrollTarget,
+  getScrollY: () => window.scrollY,
+  scrollTo: (target) =>
+    withProgrammaticScroll(
+      () => window.scrollTo({ top: target, behavior: "auto" }),
+      250
+    ),
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (frameId) => cancelAnimationFrame(frameId),
+  // No isUserScrolling here: during the settle after a goTo, chapter-height
+  // corrections produce jump-like scrolls that the heuristic misreads as user
+  // flicks, which killed cold restores mid-landing. Real input cancels the
+  // correction through the pointer/touch/wheel/key listeners instead.
+  onExhausted: (drift) =>
+    log(`[goto-trace] landingCorrectionExhausted drift=${Math.round(drift)}`),
+});
 
 /**
  * Scroll to a locator within a loaded chapter.
@@ -1005,13 +1019,16 @@ function scheduleLandingCorrection(spineIndex, locator) {
 function scrollToLocatorInChapter(spineIndex, locator) {
   try {
     const target = resolveScrollTarget(spineIndex, locator);
-    if (target == null) return false;
-
-    withProgrammaticScroll(
-      () => window.scrollTo({ top: target, behavior: "auto" }),
-      250
-    );
-    scheduleLandingCorrection(spineIndex, locator);
+    if (target != null) {
+      withProgrammaticScroll(
+        () => window.scrollTo({ top: target, behavior: "auto" }),
+        250
+      );
+    }
+    // Start the correction even while the chapter is momentarily
+    // unresolvable (its load event can fire before the iframe registers):
+    // it re-resolves every frame and performs the scroll once it can.
+    landingCorrection.start(spineIndex, locator);
 
     return true;
   } catch (e) {
@@ -1031,7 +1048,7 @@ function scrollToLocatorInChapter(spineIndex, locator) {
  * @returns {boolean} - Whether scrolling occurred
  */
 function scrollForward() {
-  cancelLandingCorrection();
+  landingCorrection.cancel();
   const currentY = window.scrollY;
   const maxY = document.documentElement.scrollHeight - window.innerHeight;
 
@@ -1052,7 +1069,7 @@ function scrollForward() {
  * @returns {boolean} - Whether scrolling occurred
  */
 function scrollBackward() {
-  cancelLandingCorrection();
+  landingCorrection.cancel();
   const currentY = window.scrollY;
 
   if (currentY <= 1) {
@@ -1112,7 +1129,7 @@ function findFirstVisibleLocator() {
  * @returns {Object|null} - Locator object or null
  */
 function findFirstVisibleElementLocator() {
-  const best = mostVisibleChapter(loadedChapterRects(), window.innerHeight);
+  const best = chapterAtViewportTop(loadedChapterRects(), window.innerHeight);
   if (!best) return null;
 
   const item = spineItems[best.spineIndex];

@@ -36,6 +36,36 @@ struct EPUBContinuousNavigatorColdRestoreTests {
         )
     }
 
+    @Test @MainActor func exactLocatorKeepsTheOutgoingChapterAtABoundary() async throws {
+        let harness = try await Harness(initialLocation: nil)
+        defer { harness.tearDown() }
+
+        try await harness.goToChapterBoundary()
+        let groundTruth = try await harness.paragraphAtViewportTop()
+        let locator = try #require(await harness.navigator.firstVisibleElementLocator())
+
+        #expect(locator.href.string == "chapter1.xhtml")
+        #expect(
+            locator.text.highlight?.trimmingCharacters(in: .whitespacesAndNewlines) == groundTruth,
+            "the exact locator must retain the outgoing chapter text at the viewport top"
+        )
+    }
+
+    @Test @MainActor func landingCorrectionStopsOnInputInsideAChapter() async throws {
+        let harness = try await Harness(initialLocation: nil)
+        defer { harness.tearDown() }
+
+        try await harness.startMidChapterJump()
+        let userPosition = try await harness.interruptLandingCorrectionFromChapter()
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let finalPosition = try await harness.currentScrollY()
+
+        #expect(
+            abs(finalPosition - userPosition) <= 2,
+            "landing correction moved the reader after direct input (\(userPosition) → \(finalPosition))"
+        )
+    }
+
     @Test @MainActor func coldReopenLandsOnTheSameVisibleParagraph() async throws {
         var exactLocator: Locator?
         var groundTruth: String?
@@ -177,7 +207,7 @@ struct EPUBContinuousNavigatorColdRestoreTests {
             window.rootViewController = nil
         }
 
-        func goToMidChapter() async throws {
+        func startMidChapterJump() async throws {
             let locator = Locator(
                 href: AnyURL(string: "chapter1.xhtml")!,
                 mediaType: .xhtml,
@@ -186,11 +216,96 @@ struct EPUBContinuousNavigatorColdRestoreTests {
             guard await navigator.go(to: locator, options: NavigatorGoOptions(animated: false)) else {
                 throw HarnessError("go(to: mid-chapter) was rejected")
             }
+            // go() can return with the jump still deferred: the readiness poll
+            // sees `readium` before the chapter's load event, so the precise
+            // scroll (and the landing correction) may only start once the
+            // chapter finishes loading. Wait for the goToScrolled trace so an
+            // interrupt targets an active correction, not a pending jump.
+            try await poll(timeout: 10, description: "goTo precise scroll") {
+                self.diagnostics.contains { $0.contains("goToScrolled") }
+            }
+        }
+
+        func goToMidChapter() async throws {
+            try await startMidChapterJump()
             try await waitForScrollSettle()
-            let scrollY = try await evaluate("window.scrollY") as? Double ?? 0
+            let scrollY = try await currentScrollY()
             guard scrollY > Double(viewport.height) else {
                 throw HarnessError("mid-chapter jump did not scroll (scrollY=\(scrollY))")
             }
+        }
+
+        func goToChapterBoundary() async throws {
+            // Require the boundary to hold on two consecutive samples with
+            // identical geometry: a chapter-height settle between this poll and
+            // the ground-truth read can otherwise shift the viewport into a
+            // spacer, where no paragraph resolves at the top.
+            var previous = "unsampled"
+            try await poll(timeout: 5, description: "chapter boundary") {
+                let result = try await self.evaluate(
+                    """
+                    (function () {
+                      var frames = document.querySelectorAll('iframe');
+                      if (frames.length < 2) return null;
+                      var first = frames[0];
+                      var firstRect = first.getBoundingClientRect();
+                      var firstTop = firstRect.top + window.scrollY;
+                      window.scrollTo(0, firstTop + firstRect.height - 250);
+
+                      var outgoing = first.getBoundingClientRect();
+                      var incoming = frames[1].getBoundingClientRect();
+                      var outgoingCoverage = outgoing.bottom;
+                      var incomingCoverage = window.innerHeight - Math.max(0, incoming.top);
+                      var atBoundary = outgoingCoverage > 0 &&
+                        outgoingCoverage < window.innerHeight / 2 &&
+                        incomingCoverage > outgoingCoverage;
+                      if (!atBoundary) return null;
+                      return window.scrollY + '/' + document.documentElement.scrollHeight;
+                    })()
+                    """
+                )
+                guard let sample = result as? String else {
+                    previous = "unsampled"
+                    return false
+                }
+                defer { previous = sample }
+                return sample == previous
+            }
+        }
+
+        func interruptLandingCorrectionFromChapter() async throws -> Double {
+            // Dispatch into the chapter under the viewport center — the one the
+            // reader is looking at. The first iframe in DOM order can be a
+            // freshly remounted neighbor whose contentDocument hasn't loaded,
+            // so its input-cancellation listeners aren't attached yet and the
+            // event would vanish (iframe events never reach the outer window).
+            let result = try await evaluate(
+                """
+                (function () {
+                  var frames = document.querySelectorAll('iframe');
+                  var mid = window.innerHeight / 2;
+                  for (var i = 0; i < frames.length; i++) {
+                    var rect = frames[i].getBoundingClientRect();
+                    if (rect.top > mid || rect.bottom <= mid) continue;
+                    if (!frames[i].contentDocument) return null;
+                    frames[i].contentDocument.dispatchEvent(
+                      new MouseEvent('mousedown', { bubbles: true })
+                    );
+                    window.scrollBy(0, 300);
+                    return window.scrollY;
+                  }
+                  return null;
+                })()
+                """
+            )
+            guard let scrollY = result as? Double else {
+                throw HarnessError("could not interrupt landing correction from the chapter")
+            }
+            return scrollY
+        }
+
+        func currentScrollY() async throws -> Double {
+            try await evaluate("window.scrollY") as? Double ?? 0
         }
 
         /// Waits until the outer scroll position is nonzero-stable — covers both

@@ -37,6 +37,32 @@ export function visibleWindowInChapter(rect, viewportHeight) {
 }
 
 /**
+ * Pick the first chapter visible from the viewport top downward. Exact
+ * persistence anchors what the reader has reached, even when the next chapter
+ * occupies more of the screen below a chapter boundary.
+ * @param {Array<{rect: {top: number, bottom: number}}>} chapters
+ * @param {number} viewportHeight
+ * @returns {Object|null} - The topmost visible entry, or null
+ */
+export function chapterAtViewportTop(chapters, viewportHeight) {
+  let best = null;
+  let bestVisibleTop = viewportHeight;
+
+  for (const chapter of chapters) {
+    const visibleTop = Math.max(0, chapter.rect.top);
+    const visibleBottom = Math.min(viewportHeight, chapter.rect.bottom);
+    if (visibleBottom <= visibleTop) continue;
+
+    if (visibleTop < bestVisibleTop) {
+      bestVisibleTop = visibleTop;
+      best = chapter;
+    }
+  }
+
+  return best;
+}
+
+/**
  * Pick the chapter occupying the most viewport height.
  * @param {Array<{rect: {top: number, bottom: number}}>} chapters
  * @param {number} viewportHeight

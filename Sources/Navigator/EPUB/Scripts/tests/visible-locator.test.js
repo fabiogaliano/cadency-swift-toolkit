@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chapterAtViewportTop,
   chapterProgression,
   mostVisibleChapter,
   visibleWindowInChapter,
@@ -69,6 +70,47 @@ describe("visibleWindowInChapter", () => {
   it("collapses to an empty window once the chapter has fully scrolled past", () => {
     const window = visibleWindowInChapter(rect(-6000, 5000), viewportHeight);
     expect(window.bottom).toBe(window.top);
+  });
+});
+
+describe("chapterAtViewportTop", () => {
+  const viewportHeight = 800;
+
+  it("returns null when every chapter is offscreen", () => {
+    const chapters = [
+      { spineIndex: 0, rect: rect(-2000, 1000) },
+      { spineIndex: 2, rect: rect(900, 1000) },
+    ];
+    expect(chapterAtViewportTop(chapters, viewportHeight)).toBeNull();
+  });
+
+  it("keeps the outgoing chapter when it still covers the viewport top", () => {
+    const chapters = [
+      // The reader has reached this tail, despite its smaller coverage.
+      { spineIndex: 3, rect: rect(-700, 1000) },
+      // The incoming chapter occupies most of the viewport below it.
+      { spineIndex: 4, rect: rect(300, 1000) },
+    ];
+
+    expect(chapterAtViewportTop(chapters, viewportHeight).spineIndex).toBe(3);
+  });
+
+  it("moves to the incoming chapter once the outgoing tail leaves", () => {
+    const chapters = [
+      { spineIndex: 3, rect: rect(-1000, 1000) },
+      { spineIndex: 4, rect: rect(0, 1000) },
+    ];
+
+    expect(chapterAtViewportTop(chapters, viewportHeight).spineIndex).toBe(4);
+  });
+
+  it("picks the first visible chapter when none covers the viewport top", () => {
+    const chapters = [
+      { spineIndex: 5, rect: rect(500, 1000) },
+      { spineIndex: 4, rect: rect(200, 200) },
+    ];
+
+    expect(chapterAtViewportTop(chapters, viewportHeight).spineIndex).toBe(4);
   });
 });
 
