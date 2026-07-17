@@ -259,7 +259,7 @@ function mountChapter(spineIndex) {
   });
 
   iframe.addEventListener("error", () => {
-    onIframeError(spineIndex);
+    onIframeError(spineIndex, iframe);
   });
 
   wrapper.appendChild(iframe);
@@ -277,6 +277,10 @@ function mountChapter(spineIndex) {
  * Handle iframe load completion.
  */
 function onIframeLoaded(spineIndex, iframe) {
+  // A late load from an evicted iframe (unmounted, or replaced by a rapid
+  // remount) must not resurrect the chapter's state, observe a dead document,
+  // or resolve a pending navigation against stale geometry.
+  if (loadedIframes.get(spineIndex) !== iframe) return;
   const wrapper = getChapterWrapper(spineIndex);
   if (!wrapper) return;
 
@@ -345,7 +349,10 @@ function reportFirstVisiblePaint(spineIndex) {
 /**
  * Handle iframe load error.
  */
-function onIframeError(spineIndex) {
+function onIframeError(spineIndex, iframe) {
+  // Same eviction guard as onIframeLoaded: a stale error must not flip a
+  // freshly remounted chapter into the error state or burn a remount.
+  if (loadedIframes.get(spineIndex) !== iframe) return;
   const wrapper = getChapterWrapper(spineIndex);
   if (!wrapper) return;
 
@@ -394,6 +401,7 @@ function unmountChapter(spineIndex) {
 
   chapterStates.set(spineIndex, "spacer");
   loadedIframes.delete(spineIndex);
+  teardownIframeHeightObserver(spineIndex);
 
   if (!isUserScrolling) {
     // Restore scroll anchor
@@ -491,10 +499,23 @@ function applyStoredSettingsToIframe(spineIndex, iframe) {
 // Iframe Height Management
 // ============================================================================
 
+// Per-chapter observer teardowns: the ResizeObserver (and any pending rAF)
+// would otherwise outlive the iframe it watches — unmount only detaches the
+// DOM, it never disconnects observers, pinning the dead chapter document.
+const heightObserverTeardowns = new Map();
+
+function teardownIframeHeightObserver(spineIndex) {
+  const teardown = heightObserverTeardowns.get(spineIndex);
+  if (!teardown) return;
+  heightObserverTeardowns.delete(spineIndex);
+  teardown();
+}
+
 /**
  * Setup height observation for an iframe.
  */
 function setupIframeHeightObserver(spineIndex, iframe) {
+  teardownIframeHeightObserver(spineIndex);
   try {
     const doc = iframe.contentDocument;
     if (!doc || !doc.body) return;
@@ -502,9 +523,12 @@ function setupIframeHeightObserver(spineIndex, iframe) {
     // Initial height measurement
     updateIframeHeight(spineIndex, iframe);
 
+    let disposed = false;
     let rafId = null;
     const scheduleUpdate = () => {
-      if (rafId != null) return;
+      // `disposed` also gates the fonts.ready closure, which can fire after
+      // teardown and would re-observe a dead iframe's height.
+      if (disposed || rafId != null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
         updateIframeHeight(spineIndex, iframe);
@@ -528,6 +552,15 @@ function setupIframeHeightObserver(spineIndex, iframe) {
     if (doc.documentElement) {
       observer.observe(doc.documentElement);
     }
+
+    heightObserverTeardowns.set(spineIndex, () => {
+      disposed = true;
+      observer.disconnect();
+      if (rafId != null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    });
   } catch (e) {
     // Security error accessing iframe content
     log("Could not setup height observer for iframe:", e.message);
@@ -956,7 +989,9 @@ const pendingNavigation = createPendingNavigation({
 /**
  * Navigate to a specific locator.
  * @param {Object} locator - Locator object with href and locations
- * @returns {boolean} - Success
+ * @returns {boolean|Promise<boolean>} - Truthful completion: settles once the
+ *   navigation's precise scroll ran, or false when it can't/won't. Awaited by
+ *   the native `go(to:)` via callAsyncJavaScript.
  */
 function goTo(locator) {
   if (!locator) return false;
@@ -1372,6 +1407,22 @@ function setDecorationGroupActivable(groupName, isActivable) {
 // Public API
 // ============================================================================
 
+/**
+ * Clear any text selection. Selections live in the chapter iframes' documents,
+ * not the wrapper main frame — clearing only the wrapper's window (the old
+ * native behavior) could never dismiss a chapter selection.
+ */
+function clearSelection() {
+  window.getSelection()?.removeAllRanges();
+  loadedIframes.forEach((iframe) => {
+    try {
+      iframe.contentWindow?.getSelection()?.removeAllRanges();
+    } catch (e) {
+      // Inaccessible iframe document; nothing selectable from here.
+    }
+  });
+}
+
 global.continuousWrapper = {
   // Initialization
   initialize: initialize,
@@ -1386,6 +1437,7 @@ global.continuousWrapper = {
   findFirstVisibleElementLocator: findFirstVisibleElementLocator,
   activateBlockAtPoint: activateBlockAtPoint,
   cancelLandingCorrectionFromUserInput: cancelLandingCorrectionFromUserInput,
+  clearSelection: clearSelection,
 
   // Decorations
   applyDecorations: applyDecorations,

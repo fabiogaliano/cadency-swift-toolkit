@@ -58,18 +58,18 @@ function createHarness(initialStates = {}) {
 }
 
 describe("navigate", () => {
-  it("scrolls immediately when the chapter is already loaded", () => {
+  it("scrolls immediately when the chapter is already loaded", async () => {
     const h = createHarness({ 3: "loaded" });
-    expect(h.nav.navigate(3, LOCATOR)).toBe(true);
+    await expect(h.nav.navigate(3, LOCATOR)).resolves.toBe(true);
     expect(h.scrolls).toEqual([{ spineIndex: 3, locator: LOCATOR }]);
     expect(h.mounts).toEqual([]);
     expect(h.startJumps).toEqual([]);
     expect(h.nav.isTarget(3)).toBe(false);
   });
 
-  it("mounts an unmounted chapter, jumps to its start, and scrolls precisely once it loads", () => {
+  it("mounts an unmounted chapter, jumps to its start, and scrolls precisely once it loads", async () => {
     const h = createHarness({ 3: "spacer" });
-    expect(h.nav.navigate(3, LOCATOR)).toBe(true);
+    const completion = h.nav.navigate(3, LOCATOR);
     expect(h.mounts).toEqual([3]);
     expect(h.startJumps).toEqual([3]);
     expect(h.scrolls).toEqual([]);
@@ -77,30 +77,48 @@ describe("navigate", () => {
     h.loadChapter(3);
     expect(h.scrolls).toEqual([{ spineIndex: 3, locator: LOCATOR }]);
     expect(h.nav.isTarget(3)).toBe(false);
+    await expect(completion).resolves.toBe(true);
   });
 
-  it("does not remount a chapter that is already loading", () => {
+  it("does not settle the completion before the chapter loads", async () => {
+    const h = createHarness({ 3: "spacer" });
+    let settled = false;
+    const completion = h.nav.navigate(3, LOCATOR).then((scrolled) => {
+      settled = true;
+      return scrolled;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    h.loadChapter(3);
+    await expect(completion).resolves.toBe(true);
+  });
+
+  it("does not remount a chapter that is already loading", async () => {
     const h = createHarness({ 3: "loading" });
-    h.nav.navigate(3, LOCATOR);
+    const completion = h.nav.navigate(3, LOCATOR);
     expect(h.mounts).toEqual([]);
 
     h.loadChapter(3);
     expect(h.scrolls).toEqual([{ spineIndex: 3, locator: LOCATOR }]);
+    await expect(completion).resolves.toBe(true);
   });
 
-  it("replaces a pending target when a new navigation arrives", () => {
+  it("replaces a pending target when a new navigation arrives, settling it false", async () => {
     const h = createHarness({ 3: "spacer", 7: "spacer" });
-    h.nav.navigate(3, LOCATOR);
+    const superseded = h.nav.navigate(3, LOCATOR);
     const otherLocator = { href: "chapter7.xhtml" };
-    h.nav.navigate(7, otherLocator);
+    const completion = h.nav.navigate(7, otherLocator);
     expect(h.nav.isTarget(3)).toBe(false);
     expect(h.nav.isTarget(7)).toBe(true);
+    await expect(superseded).resolves.toBe(false);
 
     h.loadChapter(3);
     expect(h.scrolls).toEqual([]);
 
     h.loadChapter(7);
     expect(h.scrolls).toEqual([{ spineIndex: 7, locator: otherLocator }]);
+    await expect(completion).resolves.toBe(true);
   });
 });
 
@@ -121,9 +139,9 @@ describe("load and error events", () => {
     expect(h.mounts).toEqual([]);
   });
 
-  it("remounts a failing chapter a bounded number of times, then gives up", () => {
+  it("remounts a failing chapter a bounded number of times, then gives up settling false", async () => {
     const h = createHarness({ 3: "error" });
-    h.nav.navigate(3, LOCATOR);
+    const completion = h.nav.navigate(3, LOCATOR);
     expect(h.mounts).toEqual([3]);
 
     for (let i = 0; i < MAX_ERROR_REMOUNTS; i++) {
@@ -137,14 +155,16 @@ describe("load and error events", () => {
     expect(h.nav.isTarget(3)).toBe(false);
     expect(h.logs.some((m) => m.includes("goToFailed index=3"))).toBe(true);
     expect(h.scrolls).toEqual([]);
+    await expect(completion).resolves.toBe(false);
   });
 
-  it("scrolls when a chapter loads after an error remount", () => {
+  it("scrolls when a chapter loads after an error remount", async () => {
     const h = createHarness({ 3: "error" });
-    h.nav.navigate(3, LOCATOR);
+    const completion = h.nav.navigate(3, LOCATOR);
     h.failChapter(3);
     h.loadChapter(3);
     expect(h.scrolls).toEqual([{ spineIndex: 3, locator: LOCATOR }]);
+    await expect(completion).resolves.toBe(true);
   });
 });
 

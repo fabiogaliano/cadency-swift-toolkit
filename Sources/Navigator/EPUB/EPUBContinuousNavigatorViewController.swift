@@ -643,6 +643,31 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
     }
 
+    /// Evaluates an async function body and awaits the promise it returns —
+    /// `evaluateJavaScript` can't, it would fail on a Promise result. Used for
+    /// truthful completion: `goTo` settles only when its scroll actually ran.
+    @discardableResult
+    private func evaluateAsyncScript(_ functionBody: String) async -> Result<Any, Swift.Error> {
+        guard isWrapperLoaded else {
+            return .failure(Error.wrapperLoadFailed)
+        }
+
+        if config.debugState {
+            log(.trace, "Evaluate async script: \(functionBody)")
+        }
+        return await withCheckedContinuation { continuation in
+            webView.callAsyncJavaScript(functionBody, in: nil, in: .page) { result in
+                switch result {
+                case let .success(value):
+                    continuation.resume(returning: .success(value))
+                case let .failure(error):
+                    self.log(.error, error)
+                    continuation.resume(returning: .failure(error))
+                }
+            }
+        }
+    }
+
     // MARK: - JavaScript Message Handlers
 
     private func didLog(_ body: Any) {
@@ -1089,15 +1114,20 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             return false
         }
 
-        let result = await evaluateScript("continuousWrapper.goTo(\(json))")
+        // Leave `.jumping` before awaiting: completion waits for the target
+        // chapter's load-resolved scroll, and a jump requested meanwhile must
+        // reach the wrapper to supersede this one (latest wins), not be
+        // rejected by the state machine.
         _ = on(.jumped)
 
-        if case .success = result {
-            currentLocation = normalizedLocator
-            delegate?.navigator(self, didJumpTo: normalizedLocator)
-            return true
+        let result = await evaluateAsyncScript("return await continuousWrapper.goTo(\(json));")
+
+        guard case let .success(value) = result, let scrolled = value as? Bool, scrolled else {
+            return false
         }
-        return false
+        currentLocation = normalizedLocator
+        delegate?.navigator(self, didJumpTo: normalizedLocator)
+        return true
     }
 
     public func go(to link: Link, options: NavigatorGoOptions) async -> Bool {
@@ -1156,7 +1186,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     public func clearSelection() {
-        webView.evaluateJavaScript("window.getSelection().removeAllRanges()")
+        // Selections live in the chapter iframes' documents; the wrapper
+        // routes the clear into each of them.
+        webView.evaluateJavaScript("continuousWrapper.clearSelection();")
     }
 
     // MARK: - DecorableNavigator

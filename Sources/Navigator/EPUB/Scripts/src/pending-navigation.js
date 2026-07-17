@@ -36,11 +36,18 @@ export function createPendingNavigation({
     /**
      * Navigate to a locator in a chapter: scroll immediately when loaded,
      * otherwise once the chapter's iframe load event fires. A new call
-     * replaces any pending target.
-     * @returns {boolean} - Whether the navigation was accepted
+     * replaces any pending target, settling its promise false.
+     * @returns {Promise<boolean>} - Settles when the navigation's scroll ran
+     *   (or definitively won't): true once the precise scroll happened, false
+     *   when the target chapter failed for good or the navigation was
+     *   superseded. The native side awaits this for truthful completion.
      */
     navigate(spineIndex, locator) {
-      pending = null;
+      if (pending) {
+        log(`[goto-trace] goToSuperseded index=${pending.spineIndex}`);
+        pending.settle(false);
+        pending = null;
+      }
       const state = getChapterState(spineIndex);
       log(`[goto-trace] goToStart index=${spineIndex} state=${state}`);
       const target = {
@@ -48,12 +55,16 @@ export function createPendingNavigation({
         locator,
         startedAt: now(),
         remountsLeft: MAX_ERROR_REMOUNTS,
+        settle: () => {},
       };
 
       if (state === "loaded") {
-        return resolve(target);
+        return Promise.resolve(resolve(target));
       }
 
+      const completion = new Promise((settle) => {
+        target.settle = settle;
+      });
       pending = target;
       if (state !== "loading") {
         mountChapter(spineIndex);
@@ -61,13 +72,14 @@ export function createPendingNavigation({
       // Immediate feedback: jump to the chapter's estimated start while the
       // iframe loads; resolution corrects to the precise locator.
       scrollToChapterStart(spineIndex);
-      return true;
+      return completion;
     },
 
     /** Hook for the chapter iframe's load event. */
     chapterLoaded(spineIndex) {
       if (pending?.spineIndex !== spineIndex) return;
-      resolve(pending);
+      const target = pending;
+      target.settle(resolve(target));
     },
 
     /** Hook for the chapter iframe's error event. */
@@ -81,6 +93,7 @@ export function createPendingNavigation({
       log(
         `[goto-trace] goToFailed index=${spineIndex} remounts=${MAX_ERROR_REMOUNTS}`
       );
+      pending.settle(false);
       pending = null;
     },
 
