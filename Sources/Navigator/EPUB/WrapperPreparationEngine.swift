@@ -84,6 +84,16 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
     /// `window.parent` access.
     public static let routePrefix = "continuous"
 
+    /// The isolated `WKContentWorld` holding every injected script and every
+    /// native message handler. Authored EPUB JS runs in the page world, which
+    /// after this isolation sees neither `webkit.messageHandlers` nor
+    /// `continuousWrapper`/`readium` — it cannot spoof bridge messages or
+    /// drive the wrapper API through `window.parent`. Same-origin JS interop
+    /// between the wrapper and chapter iframes keeps working because both
+    /// sides live in this same world (guarantees pinned by
+    /// `ContentWorldBridgeSemanticsTests`).
+    public static let contentWorld = WKContentWorld.world(name: "cadency")
+
     /// Whether ``start()`` has been called. Warm-ups are gated on it so the
     /// engine never builds WebKit processes before the app opts in.
     var isStarted = false
@@ -263,8 +273,31 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
         if let reflowable = Self.reflowableScript {
             let subframeOnly = "if (window.top !== window.self) {\n\(reflowable)\n}"
             webView.configuration.userContentController.addUserScript(
-                WKUserScript(source: subframeOnly, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+                WKUserScript(
+                    source: subframeOnly,
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: false,
+                    in: Self.contentWorld
+                )
             )
+        }
+
+        // The wrapper's own scripts are injected into the isolated world
+        // rather than loaded via `<script>` tags in continuous-wrapper.html —
+        // a page `<script>` runs in the page world, which cannot see the
+        // world-registered message handlers. Order matters and mirrors the
+        // former HTML: seed, bundle, shim.
+        for source in [Self.wrapperSeedScript, Self.wrapperScript, Self.wrapperShimScript] {
+            if let source {
+                webView.configuration.userContentController.addUserScript(
+                    WKUserScript(
+                        source: source,
+                        injectionTime: .atDocumentEnd,
+                        forMainFrameOnly: true,
+                        in: Self.contentWorld
+                    )
+                )
+            }
         }
 
         return webView
@@ -272,9 +305,22 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
 
     /// The reflowable Readium script injected into chapter iframes. Loaded once
     /// from the bundle and reused across all wrapper WebViews.
-    private static let reflowableScript: String? = Bundle.module
-        .url(forResource: "readium-reflowable", withExtension: "js", subdirectory: "Assets/Static/scripts")
-        .flatMap { try? String(contentsOf: $0) }
+    private static let reflowableScript: String? = bundledScript("readium-reflowable")
+
+    /// Marks the wrapper's main frame as non-reflowable for the shared Readium
+    /// script paths; formerly an inline `<script>` in continuous-wrapper.html.
+    private static let wrapperSeedScript: String? =
+        "window.readium = window.readium || { isFixedLayout: true };"
+
+    private static let wrapperScript: String? = bundledScript("readium-continuous-wrapper")
+
+    private static let wrapperShimScript: String? = bundledScript("readium-continuous-wrapper-shim")
+
+    private static func bundledScript(_ name: String) -> String? {
+        Bundle.module
+            .url(forResource: name, withExtension: "js", subdirectory: "Assets/Static/scripts")
+            .flatMap { try? String(contentsOf: $0) }
+    }
 
     // MARK: - Warm-up lifecycle (internal for @testable)
 
@@ -310,15 +356,13 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
             let staticAssets = Bundle.module.resourceURL?.fileURL?
             .appendingPath("Assets/Static", isDirectory: true),
             let wrapperURL = Bundle.module.url(forResource: "continuous-wrapper", withExtension: "html", subdirectory: "Assets"),
-            var html = try? String(contentsOf: wrapperURL)
+            let html = try? String(contentsOf: wrapperURL)
         else {
             state = .idle
             return
         }
 
         let assetsURL = server.serve(directory: staticAssets, at: "\(Self.routePrefix)/assets")
-
-        html = html.replacingOccurrences(of: "{{ASSETS_URL}}", with: assetsURL.string)
 
         let webView = webViewFactory?() ?? makeWrapperWebView()
         webView.navigationDelegate = self
@@ -443,9 +487,13 @@ extension WrapperPreparationEngine: WKNavigationDelegate {
     public func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
         guard webView === warmedWebView else { return }
 
-        webView.evaluateJavaScript("typeof continuousWrapper !== 'undefined'") { [weak self] result, _ in
+        webView.evaluateJavaScript(
+            "typeof continuousWrapper !== 'undefined'",
+            in: nil,
+            in: Self.contentWorld
+        ) { [weak self] result in
             guard let self, webView === self.warmedWebView else { return }
-            if (result as? Bool) == true {
+            if case let .success(value) = result, (value as? Bool) == true {
                 self.warmUpDidSucceed()
             } else {
                 self.warmUpDidFail(reason: "readiness probe failed — continuousWrapper not defined")

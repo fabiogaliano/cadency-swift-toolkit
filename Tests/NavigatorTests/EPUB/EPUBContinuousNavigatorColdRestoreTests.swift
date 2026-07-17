@@ -410,12 +410,15 @@ struct EPUBContinuousNavigatorColdRestoreTests {
         }
 
         private func evaluate(_ script: String) async throws -> Any? {
+            // Wrapper scripts and their state live in the isolated bridge
+            // world, not the page world.
             try await withCheckedThrowingContinuation { continuation in
-                webView.evaluateJavaScript(script) { value, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
+                webView.evaluateJavaScript(script, in: nil, in: WrapperPreparationEngine.contentWorld) { result in
+                    switch result {
+                    case let .success(value):
                         continuation.resume(returning: value)
+                    case let .failure(error):
+                        continuation.resume(throwing: error)
                     }
                 }
             }

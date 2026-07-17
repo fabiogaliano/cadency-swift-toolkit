@@ -26,6 +26,10 @@ window.addEventListener("keyup", (event) => {
 
 function shouldIgnoreEvent(event) {
   return (
+    // Only the user agent sets `isTrusted`; a synthetic key event from authored
+    // EPUB JS (which shares this same-origin DOM across the content-world
+    // boundary) must never surface as a real key message.
+    event.isTrusted === false ||
     event.defaultPrevented ||
     findNearestInteractiveElement(document.activeElement) != null
   );

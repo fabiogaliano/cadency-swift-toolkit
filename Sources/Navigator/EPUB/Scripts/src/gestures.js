@@ -18,6 +18,17 @@ import { getCssSelector } from "css-selector-generator";
 
 let isSelecting = false;
 
+// Chapter iframes are same-origin with the wrapper, and DOM events cross the
+// content-world boundary, so a synthetic event dispatched by authored EPUB JS
+// in the page world still reaches these listeners injected in the bridge
+// world. Only the user agent sets `isTrusted`, so gating on it keeps a
+// counterfeit "user" gesture from producing a real tap, block activation, or
+// pointer/key message — the defense the content-world isolation cannot provide
+// for the shared DOM. `undefined` (very old WebKit) is treated as trusted.
+function isUserEvent(event) {
+  return event.isTrusted !== false;
+}
+
 // All tap/double-tap/scroll/selection race logic lives in the arbiter
 // (`tap-arbitration.js`); this file only adapts DOM events into it and
 // carries out its decisions.
@@ -69,6 +80,8 @@ function buildClickEvent(event) {
 }
 
 function onClick(event) {
+  if (!isUserEvent(event)) return;
+
   if (tapArbiter.shouldSuppressClick()) {
     return;
   }
@@ -224,6 +237,7 @@ function clearAccidentalWordSelection() {
 }
 
 function onPointerDown(event) {
+  if (!isUserEvent(event)) return;
   tapArbiter.pointerDown({
     pointerId: event.pointerId,
     pointerType: event.pointerType,
@@ -235,6 +249,7 @@ function onPointerDown(event) {
 }
 
 function onPointerUp(event) {
+  if (!isUserEvent(event)) return;
   tapArbiter.pointerUp({
     pointerId: event.pointerId,
     x: event.clientX,
@@ -244,6 +259,7 @@ function onPointerUp(event) {
 }
 
 function onPointerMove(event) {
+  if (!isUserEvent(event)) return;
   tapArbiter.pointerMoved({
     pointerId: event.pointerId,
     x: event.clientX,
@@ -253,6 +269,7 @@ function onPointerMove(event) {
 }
 
 function onPointerCancel(event) {
+  if (!isUserEvent(event)) return;
   tapArbiter.pointerCancelled({ pointerId: event.pointerId });
   onPointerEvent("cancel", event);
 }

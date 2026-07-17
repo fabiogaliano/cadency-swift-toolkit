@@ -114,6 +114,16 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         /// Logs state changes when true.
         public var debugState: Bool
 
+        /// Runs scripts authored inside the EPUB's own documents when true.
+        ///
+        /// Off by default: chapter documents are served with a
+        /// `script-src 'none'` CSP so authored JS never runs. Chapter iframes
+        /// are same-origin with the wrapper page by design, so authored JS
+        /// could otherwise tamper with the wrapper's DOM (the bridge itself is
+        /// protected separately by content-world isolation). Enabling this
+        /// trades that hardening for scripted-EPUB support.
+        public var allowsAuthoredScripts: Bool
+
         public init(
             preferences: EPUBPreferences = .empty,
             defaults: EPUBDefaults = EPUBDefaults(),
@@ -125,7 +135,8 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             decorationTemplates: [Decoration.Style.Id: HTMLDecorationTemplate] = HTMLDecorationTemplate.defaultTemplates(),
             fontFamilyDeclarations: [AnyHTMLFontFamilyDeclaration] = [],
             readiumCSSRSProperties: CSSRSProperties = CSSRSProperties(),
-            debugState: Bool = false
+            debugState: Bool = false,
+            allowsAuthoredScripts: Bool = false
         ) {
             self.preferences = preferences
             self.defaults = defaults
@@ -138,6 +149,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             self.fontFamilyDeclarations = fontFamilyDeclarations
             self.readiumCSSRSProperties = readiumCSSRSProperties
             self.debugState = debugState
+            self.allowsAuthoredScripts = allowsAuthoredScripts
         }
     }
 
@@ -328,6 +340,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             sharedServer: WrapperPreparationEngine.shared.server,
             routePrefix: WrapperPreparationEngine.routePrefix
         )
+        viewModel.blocksAuthoredScripts = !config.allowsAuthoredScripts
 
         self.init(
             viewModel: viewModel,
@@ -439,9 +452,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     private func cancelLandingCorrectionFromNativeUserInput() {
         guard isWrapperLoaded else { return }
-        webView.evaluateJavaScript("continuousWrapper.cancelLandingCorrectionFromUserInput();") { [weak self] _, error in
-            guard let error else { return }
-            self?.log(.error, DebugError("Failed to cancel landing correction for native user input.", cause: error))
+        Task { [weak self] in
+            if case let .failure(error) = await self?.evaluateScript("continuousWrapper.cancelLandingCorrectionFromUserInput();") {
+                self?.log(.error, DebugError("Failed to cancel landing correction for native user input.", cause: error))
+            }
         }
     }
 
@@ -452,20 +466,23 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         let topViewportPoint = recognizer.location(in: webView)
         guard topViewportPoint.x.isFinite, topViewportPoint.y.isFinite else { return }
 
-        webView.evaluateJavaScript(
-            "continuousWrapper.activateBlockAtPoint(\(topViewportPoint.x), \(topViewportPoint.y));"
-        ) { [weak self] result, error in
-            if let error {
+        Task { [weak self] in
+            switch await self?.evaluateScript(
+                "continuousWrapper.activateBlockAtPoint(\(topViewportPoint.x), \(topViewportPoint.y));"
+            ) {
+            case let .failure(error):
                 self?.log(.error, DebugError("Failed to activate the double-tapped block.", cause: error))
-                return
+            case let .success(result):
+                #if DEBUG
+                    // result: "posted" (block activated) or a miss mode
+                    // ("none"/"no-chapter-at-point"/"bad-point").
+                    self?.diagnosticHandler?(
+                        "block-double-tap point=(\(topViewportPoint.x), \(topViewportPoint.y)) result=\(result as? String ?? "unknown")"
+                    )
+                #endif
+            case nil:
+                break
             }
-            #if DEBUG
-                // result: "posted" (block activated) or a miss mode
-                // ("none"/"no-chapter-at-point"/"bad-point").
-                self?.diagnosticHandler?(
-                    "block-double-tap point=(\(topViewportPoint.x), \(topViewportPoint.y)) result=\(result as? String ?? "unknown")"
-                )
-            #endif
         }
     }
 
@@ -605,8 +622,14 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             self?.didReceiveBlockActivated(body, frameInfo: frameInfo)
         }
 
+        // Handlers are registered in the isolated world only — the page world,
+        // where authored EPUB JS runs, has no `webkit.messageHandlers` to spoof.
         for (name, _) in jsMessages {
-            webView.configuration.userContentController.add(webKitBridge, name: name)
+            webView.configuration.userContentController.add(
+                webKitBridge,
+                contentWorld: WrapperPreparationEngine.contentWorld,
+                name: name
+            )
         }
     }
 
@@ -614,7 +637,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         guard jsMessagesEnabled else { return }
         jsMessagesEnabled = false
         for name in jsMessages.keys {
-            webView.configuration.userContentController.removeScriptMessageHandler(forName: name)
+            webView.configuration.userContentController.removeScriptMessageHandler(
+                forName: name,
+                contentWorld: WrapperPreparationEngine.contentWorld
+            )
         }
     }
 
@@ -632,12 +658,13 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             log(.trace, "Evaluate script: \(script)")
         }
         return await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script) { result, error in
-                if let error = error {
+            webView.evaluateJavaScript(script, in: nil, in: WrapperPreparationEngine.contentWorld) { result in
+                switch result {
+                case let .success(value):
+                    continuation.resume(returning: .success(value))
+                case let .failure(error):
                     self.log(.error, error)
                     continuation.resume(returning: .failure(error))
-                } else {
-                    continuation.resume(returning: .success(result ?? ()))
                 }
             }
         }
@@ -656,7 +683,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             log(.trace, "Evaluate async script: \(functionBody)")
         }
         return await withCheckedContinuation { continuation in
-            webView.callAsyncJavaScript(functionBody, in: nil, in: .page) { result in
+            webView.callAsyncJavaScript(functionBody, in: nil, in: WrapperPreparationEngine.contentWorld) { result in
                 switch result {
                 case let .success(value):
                     continuation.resume(returning: .success(value))
@@ -1188,7 +1215,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     public func clearSelection() {
         // Selections live in the chapter iframes' documents; the wrapper
         // routes the clear into each of them.
-        webView.evaluateJavaScript("continuousWrapper.clearSelection();")
+        Task { [weak self] in
+            await self?.evaluateScript("continuousWrapper.clearSelection();")
+        }
     }
 
     // MARK: - DecorableNavigator
@@ -1349,16 +1378,22 @@ extension EPUBContinuousNavigatorViewController: WKNavigationDelegate {
                 chaptersChildren: chapters ? chapters.children.length : -1
               };
             })();
-            """
-        ) { [weak self] result, error in
+            """,
+            in: nil,
+            in: WrapperPreparationEngine.contentWorld
+        ) { [weak self] result in
             guard let self else { return }
-            if let error = error {
+            let value: Any
+            switch result {
+            case let .success(probe):
+                value = probe
+            case let .failure(error):
                 self.log(.error, "Wrapper probe JS error: \(error)")
                 return
             }
 
-            guard let probe = result as? [String: Any] else {
-                self.log(.error, "Wrapper probe returned unexpected value: \(String(describing: result))")
+            guard let probe = value as? [String: Any] else {
+                self.log(.error, "Wrapper probe returned unexpected value: \(String(describing: value))")
                 return
             }
 

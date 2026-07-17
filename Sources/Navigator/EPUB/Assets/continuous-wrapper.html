@@ -100,8 +100,8 @@
 </head>
 <body>
   <div id="chapters"></div>
-  <script type="text/javascript">window.readium = window.readium || { isFixedLayout: true };</script>
-  <script type="text/javascript" src="{{ASSETS_URL}}/scripts/readium-continuous-wrapper.js"></script>
-  <script type="text/javascript" src="{{ASSETS_URL}}/scripts/readium-continuous-wrapper-shim.js"></script>
+  <!-- Wrapper scripts are injected by WrapperPreparationEngine as WKUserScripts
+       into the isolated content world; page <script> tags cannot see the
+       world-registered message handlers. -->
 </body>
 </html>

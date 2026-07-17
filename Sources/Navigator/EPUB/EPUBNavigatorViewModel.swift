@@ -220,13 +220,50 @@ enum EPUBScriptScope {
 
     // MARK: - Web View Server
 
+    /// Serves chapter HTML with a `script-src 'none'` CSP when true, so
+    /// authored EPUB scripts never run. Set by the continuous navigator
+    /// (default off to leave the stock navigator's behavior untouched);
+    /// injected user scripts are user-agent scripts and exempt from page CSP.
+    var blocksAuthoredScripts = false
+
     private func serve(href: RelativeURL) async -> (Resource, MediaType)? {
         guard var resource = publication.get(href) else {
             return nil
         }
         let mediaType = await resolveMediaType(for: resource, at: href)
         resource = injectReadiumCSS(in: resource, at: href)
+        if blocksAuthoredScripts {
+            resource = injectContentSecurityPolicy(in: resource, at: href)
+        }
         return (resource, mediaType)
+    }
+
+    /// Injects a CSP `<meta>` blocking authored scripts into HTML resources.
+    /// A `<meta http-equiv>` policy only applies to content after it, so it
+    /// goes at the very start of `<head>`, before any authored content.
+    private func injectContentSecurityPolicy<HREF: URLConvertible>(in resource: Resource, at href: HREF) -> Resource {
+        guard
+            let link = publication.linkWithHREF(href),
+            link.mediaType?.isHTML == true
+        else {
+            return resource
+        }
+
+        return resource.mapAsString { [weak self] content in
+            let injection = HTMLInjection(
+                content: "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\"/>",
+                target: .head,
+                location: .start
+            )
+            let injected = (try? injection.inject(in: content)) ?? content
+            if injected == content {
+                // Without a <head> the policy cannot be applied; surface it —
+                // this document's authored scripts are only contained by the
+                // content-world isolation, not the CSP.
+                self?.log(.warning, "Could not inject the script-blocking CSP (no <head>) in \(href)")
+            }
+            return injected
+        }
     }
 
     /// Resolves the media type to use to serve the given `resource`.
