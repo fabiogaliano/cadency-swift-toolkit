@@ -49,10 +49,16 @@ describe("landing correction", () => {
     const { correction, frames, scrollTo } = setup();
 
     correction.start(2, { href: "chapter.xhtml" });
-    correction.cancel();
 
+    expect(correction.cancelFromUserInput()).toBe(true);
     expect(frames.pendingCount).toBe(0);
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("does not claim unrelated user input when no correction is active", () => {
+    const { correction } = setup();
+
+    expect(correction.cancelFromUserInput()).toBe(false);
   });
 
   it("stops when the wrapper detects a user scroll", () => {

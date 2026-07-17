@@ -60,6 +60,7 @@ let anchorOffset = 0;
 let suppressAnchoringUntil = 0;
 
 let programmaticScrollUntil = 0;
+let landingCorrectionScrollUntil = 0;
 let isUserScrolling = false;
 let userScrollEndTimer = null;
 let lastScrollY = 0;
@@ -86,11 +87,18 @@ function markProgrammaticScroll(durationMs = 250) {
 }
 
 function isProgrammaticScrollActive() {
-  return Date.now() < programmaticScrollUntil;
+  const now = Date.now();
+  return now < programmaticScrollUntil || now < landingCorrectionScrollUntil;
 }
 
 function withProgrammaticScroll(fn, durationMs = 250) {
   markProgrammaticScroll(durationMs);
+  return fn();
+}
+
+function withLandingCorrectionScroll(fn, durationMs = 250) {
+  const until = Date.now() + durationMs;
+  landingCorrectionScrollUntil = Math.max(landingCorrectionScrollUntil, until);
   return fn();
 }
 
@@ -678,9 +686,28 @@ function setupVisibilityObserver() {
 /**
  * Setup scroll listener for progression updates.
  */
+function beginUserScroll(now = Date.now()) {
+  if (!isUserScrolling) {
+    estimatedCenterIndex = computeCenterChapterIndexFromHeights();
+    activeChapterIndex = estimatedCenterIndex;
+    lastEstimatedCenterIndexComputationTime = now;
+  }
+
+  isUserScrolling = true;
+  clearTimeout(userScrollEndTimer);
+  userScrollEndTimer = setTimeout(() => {
+    isUserScrolling = false;
+    flushAfterUserScroll();
+  }, 150);
+}
+
 function cancelLandingCorrectionFromUserInput() {
+  const hasLandingScrollPending = Date.now() < landingCorrectionScrollUntil;
+  if (!landingCorrection.cancelFromUserInput() && !hasLandingScrollPending) {
+    return;
+  }
+  landingCorrectionScrollUntil = 0;
   programmaticScrollUntil = 0;
-  landingCorrection.cancel();
 }
 
 function setupIframeUserInputCancellation(iframe) {
@@ -774,18 +801,7 @@ function onScroll() {
       (velocity > 10 && deltaY > window.innerHeight * 0.25);
 
     if (isJumpLike) {
-      if (!isUserScrolling) {
-        estimatedCenterIndex = computeCenterChapterIndexFromHeights();
-        activeChapterIndex = estimatedCenterIndex;
-        lastEstimatedCenterIndexComputationTime = now;
-      }
-
-      isUserScrolling = true;
-      clearTimeout(userScrollEndTimer);
-      userScrollEndTimer = setTimeout(() => {
-        isUserScrolling = false;
-        flushAfterUserScroll();
-      }, 150);
+      beginUserScroll(now);
 
       const isLargeJump = deltaY > window.innerHeight * 2;
       if (isLargeJump && now - lastEstimatedCenterIndexComputationTime > 120) {
@@ -929,7 +945,7 @@ const pendingNavigation = createPendingNavigation({
   scrollToChapterStart: (spineIndex) => {
     const wrapper = getChapterWrapper(spineIndex);
     if (!wrapper) return;
-    withProgrammaticScroll(
+    withLandingCorrectionScroll(
       () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
       250
     );
@@ -999,7 +1015,7 @@ const landingCorrection = createLandingCorrection({
   resolveTarget: resolveScrollTarget,
   getScrollY: () => window.scrollY,
   scrollTo: (target) =>
-    withProgrammaticScroll(
+    withLandingCorrectionScroll(
       () => window.scrollTo({ top: target, behavior: "auto" }),
       250
     ),
@@ -1007,8 +1023,9 @@ const landingCorrection = createLandingCorrection({
   cancelFrame: (frameId) => cancelAnimationFrame(frameId),
   // No isUserScrolling here: during the settle after a goTo, chapter-height
   // corrections produce jump-like scrolls that the heuristic misreads as user
-  // flicks, which killed cold restores mid-landing. Real input cancels the
-  // correction through the pointer/touch/wheel/key listeners instead.
+  // flicks, which killed cold restores mid-landing. DOM input cancels here;
+  // native scroll gestures and accessibility scrolling call the same public
+  // cancellation seam from the navigator.
   onExhausted: (drift) =>
     log(`[goto-trace] landingCorrectionExhausted drift=${Math.round(drift)}`),
 });
@@ -1020,7 +1037,7 @@ function scrollToLocatorInChapter(spineIndex, locator) {
   try {
     const target = resolveScrollTarget(spineIndex, locator);
     if (target != null) {
-      withProgrammaticScroll(
+      withLandingCorrectionScroll(
         () => window.scrollTo({ top: target, behavior: "auto" }),
         250
       );
@@ -1035,7 +1052,7 @@ function scrollToLocatorInChapter(spineIndex, locator) {
     // Fallback: just scroll to chapter start
     const wrapper = getChapterWrapper(spineIndex);
     if (!wrapper) return false;
-    withProgrammaticScroll(
+    withLandingCorrectionScroll(
       () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
       250
     );
@@ -1049,6 +1066,7 @@ function scrollToLocatorInChapter(spineIndex, locator) {
  */
 function scrollForward() {
   landingCorrection.cancel();
+  landingCorrectionScrollUntil = 0;
   const currentY = window.scrollY;
   const maxY = document.documentElement.scrollHeight - window.innerHeight;
 
@@ -1070,6 +1088,7 @@ function scrollForward() {
  */
 function scrollBackward() {
   landingCorrection.cancel();
+  landingCorrectionScrollUntil = 0;
   const currentY = window.scrollY;
 
   if (currentY <= 1) {
@@ -1366,6 +1385,7 @@ global.continuousWrapper = {
   findFirstVisibleLocator: findFirstVisibleLocator,
   findFirstVisibleElementLocator: findFirstVisibleElementLocator,
   activateBlockAtPoint: activateBlockAtPoint,
+  cancelLandingCorrectionFromUserInput: cancelLandingCorrectionFromUserInput,
 
   // Decorations
   applyDecorations: applyDecorations,

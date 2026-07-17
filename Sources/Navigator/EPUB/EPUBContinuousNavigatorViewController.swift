@@ -419,6 +419,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
         webView.frame = view.bounds
         webView.navigationDelegate = self
+        webView.scrollView.panGestureRecognizer.addTarget(
+            self,
+            action: #selector(didBeginNativeScrollInteraction(_:))
+        )
 
         view.addSubview(webView)
         webView.addGestureRecognizer(blockDoubleTapRecognizer)
@@ -426,6 +430,19 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         enableJSMessages()
 
         delegate?.navigator(self, setupUserScripts: webView.configuration.userContentController)
+    }
+
+    @objc private func didBeginNativeScrollInteraction(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        cancelLandingCorrectionFromNativeUserInput()
+    }
+
+    private func cancelLandingCorrectionFromNativeUserInput() {
+        guard isWrapperLoaded else { return }
+        webView.evaluateJavaScript("continuousWrapper.cancelLandingCorrectionFromUserInput();") { [weak self] _, error in
+            guard let error else { return }
+            self?.log(.error, DebugError("Failed to cancel landing correction for native user input.", cause: error))
+        }
     }
 
     private func didRecognizeBlockDoubleTap(_ recognizer: UITapGestureRecognizer) {
@@ -1228,6 +1245,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     // MARK: - UIAccessibilityAction
 
     override open func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        cancelLandingCorrectionFromNativeUserInput()
         guard !super.accessibilityScroll(direction) else { return true }
 
         let options = NavigatorGoOptions(animated: false)

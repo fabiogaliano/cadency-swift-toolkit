@@ -38,6 +38,12 @@ export function createLandingCorrection({
     active = null;
   }
 
+  function cancelFromUserInput() {
+    if (active == null) return false;
+    cancel();
+    return true;
+  }
+
   function start(spineIndex, locator) {
     cancel();
     const state = { framesLeft: maxFrames, frameId: 0, spineIndex };
@@ -73,5 +79,5 @@ export function createLandingCorrection({
     state.frameId = requestFrame(check);
   }
 
-  return { cancel, isActive, start, targetIndex };
+  return { cancel, cancelFromUserInput, isActive, start, targetIndex };
 }
