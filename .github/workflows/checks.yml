@@ -114,6 +114,8 @@ jobs:
           cache-dependency-path: Sources/Navigator/EPUB/Scripts/pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm --dir "$scripts" install --frozen-lockfile
+      - name: Test
+        run: pnpm --dir "$scripts" run test
       - name: Lint
         run: pnpm --dir "$scripts" run lint
       - name: Check formatting
