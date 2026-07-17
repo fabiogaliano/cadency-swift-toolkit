@@ -231,8 +231,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         public var diagnosticHandler: ((String) -> Void)?
     #endif
 
-    /// Navigation state.
-    private enum State: Equatable {
+    /// Navigation state. Internal (not private) so transition semantics —
+    /// notably jump-deferral during `.loading` — are unit-testable.
+    enum State: Equatable {
         case initializing
         case loading(pendingLocator: Locator?)
         case idle
@@ -244,6 +245,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
                 self = .loading(pendingLocator: locator)
             case (.loading, .loaded):
                 self = .idle
+            case let (.loading, .jump(locator)):
+                // A jump requested while the wrapper loads is deferred, latest
+                // wins; `completeLoading()` executes it when loading finishes.
+                self = .loading(pendingLocator: locator)
             case (.loading, _):
                 return false
             case let (.idle, .jump(locator)):
@@ -518,7 +523,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         return state.transition(event)
     }
 
-    private enum Event: Equatable {
+    enum Event: Equatable {
         case load(Locator?)
         case loaded
         case jump(Locator)
@@ -656,7 +661,9 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
                 "[open-trace] initialChaptersLoaded t=\(Int(Date().timeIntervalSince1970 * 1000))"
             )
         #endif
-        _ = on(.loaded)
+        Task {
+            await completeLoading()
+        }
     }
 
     private func initializeWrapper() async {
@@ -717,12 +724,26 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             await sendDecorations(diffables, in: group)
         }
 
-        // Navigate to initial location if provided
-        if let initialLocation = currentLocation {
-            await go(to: initialLocation, options: NavigatorGoOptions(animated: false))
-        }
+        await completeLoading()
+    }
 
-        _ = on(.loaded)
+    /// Leaves `.loading` and executes the locator the load was carrying — the
+    /// initial location on first load, `currentLocation` on a wrapper reload,
+    /// or the latest `go()` requested while loading. Both load-completion
+    /// signals (the wrapper init sequence and the JS initial-chapters message)
+    /// funnel here; whichever fires second finds the state already past
+    /// `.loading` and does nothing.
+    private func completeLoading() async {
+        guard case let .loading(pendingLocator) = state, on(.loaded) else { return }
+        #if DEBUG
+            diagnosticHandler?("[goto-trace] completeLoading pending=\(pendingLocator?.href.string ?? "nil")")
+        #endif
+        if let pendingLocator {
+            let jumped = await go(to: pendingLocator, options: NavigatorGoOptions(animated: false))
+            if !jumped {
+                log(.warning, "Pending locator was not applied after load: \(pendingLocator.href)")
+            }
+        }
     }
 
     private func progressionDidChange(_ body: Any) {
@@ -1030,7 +1051,21 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     public func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool {
         let normalizedLocator = publication.normalizeLocator(locator)
 
-        guard on(.jump(normalizedLocator)) else { return false }
+        guard on(.jump(normalizedLocator)) else {
+            #if DEBUG
+                diagnosticHandler?("[goto-trace] goToRejected state=\(state) href=\(normalizedLocator.href)")
+            #endif
+            return false
+        }
+
+        // Accepted as the load's pending locator rather than executed:
+        // `completeLoading()` runs it once the wrapper finishes loading.
+        if case .loading = state {
+            #if DEBUG
+                diagnosticHandler?("[goto-trace] goDeferred href=\(normalizedLocator.href)")
+            #endif
+            return true
+        }
 
         guard let json = try? normalizedLocator.jsonString() else {
             _ = on(.jumped)
