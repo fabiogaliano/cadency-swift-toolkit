@@ -10,7 +10,11 @@
 import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
 import { findSpineIndexByHref, offsetInChapter } from "./navigation-target";
-import { chapterProgression, mostVisibleChapter } from "./visible-locator";
+import {
+  chapterProgression,
+  mostVisibleChapter,
+  visibleWindowInChapter,
+} from "./visible-locator";
 
 // Polyfill for ResizeObserver on older iOS versions
 import { ResizeObserver as ResizeObserverPolyfill } from "@juggle/resize-observer";
@@ -915,37 +919,105 @@ function goTo(locator) {
 }
 
 /**
+ * Absolute outer-document Y a locator should land at, against the geometry
+ * of this instant — or null while the chapter isn't resolvable.
+ */
+function resolveScrollTarget(spineIndex, locator) {
+  const wrapper = getChapterWrapper(spineIndex);
+  const iframe = loadedIframes.get(spineIndex);
+  if (!wrapper || !iframe) return null;
+
+  const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
+  const chapterHeight =
+    getIframeScrollHeight(iframe) ||
+    chapterHeights.get(spineIndex) ||
+    config.defaultChapterHeight;
+  const offset = offsetInChapter(
+    locator,
+    iframe.contentDocument,
+    chapterHeight
+  );
+  const maxScroll = Math.max(
+    0,
+    document.documentElement.scrollHeight - window.innerHeight
+  );
+  return Math.min(wrapperTop + Math.max(0, offset), maxScroll);
+}
+
+let landingCorrection = null;
+
+function cancelLandingCorrection() {
+  if (landingCorrection != null) {
+    cancelAnimationFrame(landingCorrection.rafId);
+    landingCorrection = null;
+  }
+}
+
+/**
+ * A one-shot goTo scroll races the geometry it targets: chapter heights are
+ * corrected asynchronously right after mount, and WebKit clamps a scroll
+ * issued against the stale, smaller document — cold restore used to land at
+ * the chapter start this way. Re-resolve the target and re-scroll each frame
+ * until the landing sticks, bounded, aborting as soon as the user scrolls.
+ */
+function scheduleLandingCorrection(spineIndex, locator) {
+  cancelLandingCorrection();
+  const state = { framesLeft: 90, rafId: 0 };
+  landingCorrection = state;
+
+  const check = () => {
+    if (landingCorrection !== state) return;
+    if (isUserScrolling) {
+      landingCorrection = null;
+      return;
+    }
+    state.framesLeft -= 1;
+
+    const target = resolveScrollTarget(spineIndex, locator);
+    if (target == null) {
+      landingCorrection = null;
+      return;
+    }
+    const drift = Math.abs(window.scrollY - target);
+    if (drift > 1) {
+      withProgrammaticScroll(
+        () => window.scrollTo({ top: target, behavior: "auto" }),
+        250
+      );
+    }
+    if (state.framesLeft <= 0) {
+      if (drift > 1) {
+        log(
+          `[goto-trace] landingCorrectionExhausted drift=${Math.round(drift)}`
+        );
+      }
+      landingCorrection = null;
+      return;
+    }
+    state.rafId = requestAnimationFrame(check);
+  };
+  state.rafId = requestAnimationFrame(check);
+}
+
+/**
  * Scroll to a locator within a loaded chapter.
  */
 function scrollToLocatorInChapter(spineIndex, locator) {
-  const wrapper = getChapterWrapper(spineIndex);
-  const iframe = loadedIframes.get(spineIndex);
-  if (!wrapper || !iframe) return false;
-
   try {
-    const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
-    const chapterHeight =
-      getIframeScrollHeight(iframe) ||
-      chapterHeights.get(spineIndex) ||
-      config.defaultChapterHeight;
-    const offset = offsetInChapter(
-      locator,
-      iframe.contentDocument,
-      chapterHeight
-    );
+    const target = resolveScrollTarget(spineIndex, locator);
+    if (target == null) return false;
 
     withProgrammaticScroll(
-      () =>
-        window.scrollTo({
-          top: wrapperTop + Math.max(0, offset),
-          behavior: "auto",
-        }),
+      () => window.scrollTo({ top: target, behavior: "auto" }),
       250
     );
+    scheduleLandingCorrection(spineIndex, locator);
 
     return true;
   } catch (e) {
     // Fallback: just scroll to chapter start
+    const wrapper = getChapterWrapper(spineIndex);
+    if (!wrapper) return false;
     withProgrammaticScroll(
       () => wrapper.scrollIntoView({ behavior: "auto", block: "start" }),
       250
@@ -959,6 +1031,7 @@ function scrollToLocatorInChapter(spineIndex, locator) {
  * @returns {boolean} - Whether scrolling occurred
  */
 function scrollForward() {
+  cancelLandingCorrection();
   const currentY = window.scrollY;
   const maxY = document.documentElement.scrollHeight - window.innerHeight;
 
@@ -979,6 +1052,7 @@ function scrollForward() {
  * @returns {boolean} - Whether scrolling occurred
  */
 function scrollBackward() {
+  cancelLandingCorrection();
   const currentY = window.scrollY;
 
   if (currentY <= 1) {
@@ -1046,7 +1120,14 @@ function findFirstVisibleElementLocator() {
 
   try {
     const readium = getIframeReadium(best.iframe);
-    const iframeLocator = readium?.findFirstVisibleLocator?.();
+    // The chapter iframe is as tall as its content, so its DOM walk needs the
+    // outer viewport's slice in chapter coordinates — against its own window
+    // it would always anchor the chapter's first element.
+    const visible = visibleWindowInChapter(best.rect, window.innerHeight);
+    const iframeLocator = readium?.findFirstVisibleLocator?.(
+      visible.top,
+      visible.bottom
+    );
 
     if (iframeLocator) {
       return {

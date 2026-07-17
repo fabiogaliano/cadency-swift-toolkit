@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { chapterProgression, mostVisibleChapter } from "../src/visible-locator";
+import {
+  chapterProgression,
+  mostVisibleChapter,
+  visibleWindowInChapter,
+} from "../src/visible-locator";
 
 // Viewport-relative rect helper: `top` is the chapter top's distance from
 // the viewport top (negative once scrolled past it).
@@ -27,6 +31,44 @@ describe("chapterProgression", () => {
     expect(chapterProgression(rect(-100, NaN))).toBe(0);
     expect(chapterProgression(null)).toBe(0);
     expect(chapterProgression(undefined)).toBe(0);
+  });
+});
+
+describe("visibleWindowInChapter", () => {
+  const viewportHeight = 800;
+
+  it("is the scrolled slice in the middle of a long chapter", () => {
+    expect(visibleWindowInChapter(rect(-2000, 5000), viewportHeight)).toEqual({
+      top: 2000,
+      bottom: 2800,
+    });
+  });
+
+  it("starts at the chapter top while it is still below the viewport top", () => {
+    // Chapter boundary: the next chapter's head is entering from below.
+    expect(visibleWindowInChapter(rect(300, 1000), viewportHeight)).toEqual({
+      top: 0,
+      bottom: 500,
+    });
+  });
+
+  it("clamps the bottom to the chapter end", () => {
+    expect(visibleWindowInChapter(rect(-4500, 5000), viewportHeight)).toEqual({
+      top: 4500,
+      bottom: 5000,
+    });
+  });
+
+  it("spans a chapter shorter than the viewport entirely", () => {
+    expect(visibleWindowInChapter(rect(100, 400), viewportHeight)).toEqual({
+      top: 0,
+      bottom: 400,
+    });
+  });
+
+  it("collapses to an empty window once the chapter has fully scrolled past", () => {
+    const window = visibleWindowInChapter(rect(-6000, 5000), viewportHeight);
+    expect(window.bottom).toBe(window.top);
   });
 });
 

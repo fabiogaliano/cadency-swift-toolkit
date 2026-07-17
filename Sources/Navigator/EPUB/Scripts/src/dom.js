@@ -69,8 +69,14 @@ export function findNearestInteractiveElement(element) {
 
 /// Returns the `Locator` object to the first block element that is visible on
 /// the screen.
-export function findFirstVisibleLocator() {
-  const element = findElement(document.body);
+///
+/// The visibility window defaults to this document's own viewport. An
+/// embedding host (the continuous wrapper's full-height chapter iframes)
+/// passes the on-screen slice in document-local coordinates instead — there
+/// this window spans the whole chapter, so its own innerHeight would count
+/// every element as visible and always anchor the chapter's first block.
+export function findFirstVisibleLocator(visibleTop, visibleBottom) {
+  const element = findElement(document.body, visibleTop, visibleBottom);
   return {
     href: "#",
     type: "application/xhtml+xml",
@@ -83,17 +89,20 @@ export function findFirstVisibleLocator() {
   };
 }
 
-function findElement(rootElement) {
+function findElement(rootElement, visibleTop, visibleBottom) {
   for (var i = 0; i < rootElement.children.length; i++) {
     const child = rootElement.children[i];
-    if (!shouldIgnoreElement(child) && isElementVisible(child)) {
-      return findElement(child);
+    if (
+      !shouldIgnoreElement(child) &&
+      isElementVisible(child, visibleTop, visibleBottom)
+    ) {
+      return findElement(child, visibleTop, visibleBottom);
     }
   }
   return rootElement;
 }
 
-function isElementVisible(element) {
+function isElementVisible(element, visibleTop, visibleBottom) {
   if (readium.isFixedLayout) return true;
 
   if (element === document.body || element === document.documentElement) {
@@ -104,6 +113,11 @@ function isElementVisible(element) {
   }
 
   const rect = element.getBoundingClientRect();
+  if (typeof visibleTop === "number" && typeof visibleBottom === "number") {
+    // The host's slice is always a vertical window, independent of this
+    // document's own scroll/pagination mode.
+    return rect.bottom > visibleTop && rect.top < visibleBottom;
+  }
   if (isScrollModeEnabled()) {
     return rect.bottom > 0 && rect.top < window.innerHeight;
   } else {

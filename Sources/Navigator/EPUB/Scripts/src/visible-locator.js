@@ -22,6 +22,21 @@ export function chapterProgression(rect) {
 }
 
 /**
+ * The on-screen slice of a chapter, in chapter-local coordinates. The
+ * chapter's iframe is as tall as its content, so its own viewport can't
+ * express "what the reader sees" — this translates the outer viewport
+ * into the iframe's coordinate space instead.
+ * @param {{top: number, height: number}} rect - Viewport-relative chapter rect
+ * @param {number} viewportHeight
+ * @returns {{top: number, bottom: number}}
+ */
+export function visibleWindowInChapter(rect, viewportHeight) {
+  const top = Math.max(0, -rect.top);
+  const bottom = Math.min(rect.height, viewportHeight - rect.top);
+  return { top, bottom: Math.max(top, bottom) };
+}
+
+/**
  * Pick the chapter occupying the most viewport height.
  * @param {Array<{rect: {top: number, bottom: number}}>} chapters
  * @param {number} viewportHeight
