@@ -55,4 +55,6 @@ interface ReadiumChapterLink {
 
 declare const readium: {
   link?: ReadiumChapterLink;
+  /** Set only by the continuous wrapper's subframe bootstrap. */
+  isContinuousReader?: boolean;
 };

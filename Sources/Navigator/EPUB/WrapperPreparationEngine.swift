@@ -274,7 +274,7 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
             // Imported modules inspect `window.readium` while the bundle is
             // initializing, before index.js publishes the final API object.
             // Seed it first so selection/progression listeners are installed.
-            let subframeOnly = "if (window.top !== window.self) {\nwindow.readium = window.readium || {};\n\(reflowable)\n}"
+            let subframeOnly = "if (window.top !== window.self) {\nwindow.readium = window.readium || {};\nwindow.readium.isContinuousReader = true;\n\(reflowable)\n}"
             webView.configuration.userContentController.addUserScript(
                 WKUserScript(
                     source: subframeOnly,

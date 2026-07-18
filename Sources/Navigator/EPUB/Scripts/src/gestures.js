@@ -13,6 +13,7 @@ import {
   buildBlockActivationPayload,
 } from "./cadency/interaction/blocks";
 import { createTapArbiter } from "./cadency/interaction/tap-arbitration";
+import { shouldPostPointerEvent } from "./cadency/interaction/pointer-bridge";
 import { logError } from "./utils";
 import { addUserEventListener } from "./user-event";
 import { getCssSelector } from "css-selector-generator";
@@ -262,6 +263,10 @@ function onPointerEvent(phase, event) {
   // If the user is currently selecting text, we report this event as cancelled to prevent detecting gestures.
   if (isSelecting) {
     phase = "cancel";
+  }
+
+  if (!shouldPostPointerEvent(phase, readium.isContinuousReader === true)) {
+    return;
   }
 
   // Looking for the elements is costly, so we avoid doing it on every move event.

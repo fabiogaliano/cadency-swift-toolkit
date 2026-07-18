@@ -394,6 +394,10 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     deinit {
         pendingLocationUpdateTask?.cancel()
         positionsTask?.cancel()
+        let requests = navigationRequests
+        Task { @MainActor in
+            requests.cancelAll()
+        }
         disableJSMessages()
         #if DEBUG
             diagnosticHandler?("[lifetime] navigator-deinit")
@@ -598,28 +602,29 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     private var jsMessagesEnabled = false
 
     private var pendingLocationUpdateTask: Task<Void, Never>?
+    private let navigationRequests = NavigationRequestCoordinator<Locator>()
 
     private func enableJSMessages() {
         guard !jsMessagesEnabled else { return }
         jsMessagesEnabled = true
 
-        registerJSMessage(named: "log") { [weak self] body, _ in self?.didLog(body) }
-        registerJSMessage(named: "logError") { [weak self] body, _ in self?.didLogError(body) }
-        registerJSMessage(named: "spreadLoadStarted") { _, _ in }
-        registerJSMessage(named: "spreadLoaded") { [weak self] _, frameInfo in
+        registerJSMessage(named: "log", expectedFrame: .either) { [weak self] body, _ in self?.didLog(body) }
+        registerJSMessage(named: "logError", expectedFrame: .either) { [weak self] body, _ in self?.didLogError(body) }
+        registerJSMessage(named: "spreadLoadStarted", expectedFrame: .main) { _, _ in }
+        registerJSMessage(named: "spreadLoaded", expectedFrame: .main) { [weak self] _, frameInfo in
             // Chapter iframes bundle the same scripts as the wrapper; only the wrapper's own
             // spread-loaded signal marks the initial load.
             guard frameInfo.isMainFrame else { return }
             self?.initialChaptersDidLoad()
         }
-        registerJSMessage(named: "progressionChanged") { [weak self] body, _ in self?.progressionDidChange(body) }
-        registerJSMessage(named: "chapterMounted") { [weak self] body, _ in self?.chapterDidMount(body) }
-        registerJSMessage(named: "selectionChanged") { [weak self] body, _ in self?.selectionDidChange(body) }
-        registerJSMessage(named: "decorationActivated") { [weak self] body, _ in self?.decorationDidActivate(body) }
-        registerJSMessage(named: "tap") { [weak self] body, _ in self?.didTap(body) }
-        registerJSMessage(named: "pointerEventReceived") { [weak self] body, _ in self?.didReceivePointerEvent(body) }
-        registerJSMessage(named: "keyEventReceived") { [weak self] body, _ in self?.didReceiveKeyEvent(body) }
-        registerJSMessage(named: "blockActivated") { [weak self] body, frameInfo in
+        registerJSMessage(named: "progressionChanged", expectedFrame: .main) { [weak self] body, _ in self?.progressionDidChange(body) }
+        registerJSMessage(named: "chapterMounted", expectedFrame: .main) { [weak self] body, _ in self?.chapterDidMount(body) }
+        registerJSMessage(named: "selectionChanged", expectedFrame: .chapter) { [weak self] body, _ in self?.selectionDidChange(body) }
+        registerJSMessage(named: "decorationActivated", expectedFrame: .chapter) { [weak self] body, _ in self?.decorationDidActivate(body) }
+        registerJSMessage(named: "tap", expectedFrame: .chapter) { [weak self] body, _ in self?.didTap(body) }
+        registerJSMessage(named: "pointerEventReceived", expectedFrame: .chapter) { [weak self] body, _ in self?.didReceivePointerEvent(body) }
+        registerJSMessage(named: "keyEventReceived", expectedFrame: .chapter) { [weak self] body, _ in self?.didReceiveKeyEvent(body) }
+        registerJSMessage(named: "blockActivated", expectedFrame: .chapter) { [weak self] body, frameInfo in
             self?.didReceiveBlockActivated(body, frameInfo: frameInfo)
         }
 
@@ -645,8 +650,32 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         }
     }
 
-    private func registerJSMessage(named name: String, handler: @escaping (Any, WKFrameInfo) -> Void) {
-        jsMessages[name] = handler
+    private enum BridgeFrame: Equatable {
+        case main
+        case chapter
+        case either
+    }
+
+    private func registerJSMessage(
+        named name: String,
+        expectedFrame: BridgeFrame,
+        handler: @escaping (Any, WKFrameInfo) -> Void
+    ) {
+        jsMessages[name] = { [weak self] body, frameInfo in
+            guard let self else { return }
+            switch BridgePayloadBudget.validate(body) {
+            case .success:
+                break
+            case let .failure(reason):
+                self.log(.warning, "Bridge \(name) rejected: \(reason.warning)")
+                return
+            }
+            guard expectedFrame == .either || (expectedFrame == .main) == frameInfo.isMainFrame else {
+                self.log(.warning, "Bridge \(name) rejected: unexpected frame")
+                return
+            }
+            handler(body, frameInfo)
+        }
     }
 
     @discardableResult
@@ -804,15 +833,17 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     /// funnel here; whichever fires second finds the state already past
     /// `.loading` and does nothing.
     private func completeLoading() async {
-        guard case let .loading(pendingLocator) = state, on(.loaded) else { return }
+        guard case let .loading(initialLocator) = state, on(.loaded) else { return }
         #if DEBUG
-            diagnosticHandler?("[goto-trace] completeLoading pending=\(pendingLocator?.href.string ?? "nil")")
+            diagnosticHandler?("[goto-trace] completeLoading pending=\(navigationRequests.currentLocator?.href.string ?? initialLocator?.href.string ?? "nil")")
         #endif
-        if let pendingLocator {
-            let jumped = await go(to: pendingLocator, options: NavigatorGoOptions(animated: false))
-            if !jumped {
-                log(.warning, "Pending locator was not applied after load: \(pendingLocator.href)")
-            }
+        if let requestID = navigationRequests.currentID,
+           let locator = navigationRequests.currentLocator
+        {
+            launchNavigation(id: requestID, locator: locator)
+        } else if let initialLocator {
+            let requestID = navigationRequests.begin(initialLocator)
+            launchNavigation(id: requestID, locator: initialLocator)
         }
     }
 
@@ -841,32 +872,39 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     private func selectionDidChange(_ body: Any) {
-        guard
-            let selection = body as? [String: Any],
-            let text = try? Locator.Text(json: JSONValue(selection["text"]))
-        else {
+        // `null` is the explicit, valid signal that WebKit's selection cleared.
+        guard !(body is NSNull) else {
             viewModel.editingActions.selection = nil
             return
         }
-
-        let frame = CGRect(json: selection["rect"]) ?? .zero
-
-        // `selection` is already shaped like a Locator JSON object (href, type,
-        // locations.cssSelector anchored to the range's containing element), so
-        // parsing it directly anchors the resulting Locator to the selection
-        // itself and lets it resolve through `rangeFromLocator` on its own -
-        // instead of inheriting `currentLocation` (the reading position), which
-        // may be a different, non-containing element. Fall back to the old
-        // currentLocation-based Locator when the parse fails (e.g. a malformed
-        // href, or the script omitting `locations` when no selector resolved).
-        let locator = (try? Locator(json: JSONValue(selection))) ?? currentLocation?.copy(text: { $0 = text })
-
-        if let locator = locator {
-            viewModel.editingActions.selection = Selection(
-                locator: locator,
-                frame: frame
-            )
+        guard
+            let selection = body as? [String: Any],
+            let locator = try? Locator(json: JSONValue(selection)),
+            !locator.href.string.isEmpty,
+            let highlight = locator.text.highlight,
+            !highlight.isEmpty,
+            let cssSelector = locator.locations.cssSelector,
+            !cssSelector.isEmpty,
+            let frame = Self.parseSelectionRect(selection["rect"])
+        else {
+            // A malformed range must not inherit `currentLocation`: that would
+            // turn a bad bridge message into a persisted highlight elsewhere.
+            viewModel.editingActions.selection = nil
+            log(.warning, "selectionChanged rejected: invalid locator or geometry")
+            return
         }
+        viewModel.editingActions.selection = Selection(locator: locator, frame: frame)
+    }
+
+    private static func parseSelectionRect(_ json: Any?) -> CGRect? {
+        guard
+            let dict = json as? [String: Any],
+            let left = dict["left"] as? Double, left.isFinite,
+            let top = dict["top"] as? Double, top.isFinite,
+            let width = dict["width"] as? Double, width.isFinite, width > 0,
+            let height = dict["height"] as? Double, height.isFinite, height > 0
+        else { return nil }
+        return CGRect(x: left, y: top, width: width, height: height)
     }
 
     private func decorationDidActivate(_ body: Any) {
@@ -876,11 +914,22 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             let groupName = data["group"] as? String
         else { return }
 
-        let frame = CGRect(json: data["rect"])
-        let point = (data["click"] as? [String: Any]).flatMap { click in
-            let x = click["x"] as? Double ?? 0
-            let y = click["y"] as? Double ?? 0
-            return CGPoint(x: x, y: y)
+        guard let frame = Self.parseSelectionRect(data["rect"]) else {
+            log(.warning, "decorationActivated rejected: invalid geometry")
+            return
+        }
+        let point: CGPoint?
+        if let click = data["click"] as? [String: Any] {
+            guard
+                let x = click["x"] as? Double, x.isFinite,
+                let y = click["y"] as? Double, y.isFinite
+            else {
+                log(.warning, "decorationActivated rejected: invalid click coordinates")
+                return
+            }
+            point = CGPoint(x: x, y: y)
+        } else {
+            point = nil
         }
 
         guard
@@ -894,11 +943,15 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     }
 
     private func didTap(_ body: Any) {
-        guard let data = body as? [String: Any] else { return }
-        let x = data["x"] as? Double ?? 0
-        let y = data["y"] as? Double ?? 0
-        let point = CGPoint(x: x, y: y)
-        delegate?.navigator(self, didTapAt: point)
+        guard
+            let data = body as? [String: Any],
+            let x = data["x"] as? Double, x.isFinite,
+            let y = data["y"] as? Double, y.isFinite
+        else {
+            log(.warning, "tap rejected: invalid coordinates")
+            return
+        }
+        delegate?.navigator(self, didTapAt: CGPoint(x: x, y: y))
     }
 
     private func didReceivePointerEvent(_ body: Any) {
@@ -1120,42 +1173,74 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
 
     public func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool {
         let normalizedLocator = publication.normalizeLocator(locator)
+        let id = UUID()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                beginNavigation(id: id, locator: normalizedLocator) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+        }, onCancel: { [weak self] in
+            Task { @MainActor in
+                self?.navigationRequests.cancel(id)
+            }
+        })
+    }
 
-        guard on(.jump(normalizedLocator)) else {
+    /// Settles only through `navigationRequests`, so a buffered/deferred jump
+    /// cannot claim success until the wrapper's target scroll resolves.
+    private func beginNavigation(id: UUID, locator: Locator, completion: @escaping (Bool) -> Void) {
+        _ = navigationRequests.begin(locator, completion: completion, id: id)
+        guard on(.jump(locator)) else {
+            navigationRequests.cancel(id)
             #if DEBUG
-                diagnosticHandler?("[goto-trace] goToRejected state=\(state) href=\(normalizedLocator.href)")
+                diagnosticHandler?("[goto-trace] goToRejected state=\(state) href=\(locator.href)")
             #endif
-            return false
+            return
         }
 
-        // Accepted as the load's pending locator rather than executed:
-        // `completeLoading()` runs it once the wrapper finishes loading.
         if case .loading = state {
             #if DEBUG
-                diagnosticHandler?("[goto-trace] goDeferred href=\(normalizedLocator.href)")
+                diagnosticHandler?("[goto-trace] goDeferred href=\(locator.href)")
             #endif
-            return true
+            return
         }
 
-        guard let json = try? normalizedLocator.jsonString() else {
-            _ = on(.jumped)
-            return false
-        }
-
-        // Leave `.jumping` before awaiting: completion waits for the target
-        // chapter's load-resolved scroll, and a jump requested meanwhile must
-        // reach the wrapper to supersede this one (latest wins), not be
-        // rejected by the state machine.
         _ = on(.jumped)
+        launchNavigation(id: id, locator: locator)
+    }
 
-        let result = await evaluateAsyncScript("return await continuousWrapper.goTo(\(json));")
+    private func launchNavigation(id: UUID, locator: Locator) {
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.runNavigation(id: id, locator: locator)
+            self.navigationRequests.resolve(id, result: result)
+        }
+    }
 
-        guard case let .success(value) = result, let scrolled = value as? Bool, scrolled else {
+    private func runNavigation(id: UUID, locator: Locator) async -> Bool {
+        guard navigationRequests.isCurrent(id), let json = try? locator.jsonString() else {
             return false
         }
-        currentLocation = normalizedLocator
-        delegate?.navigator(self, didJumpTo: normalizedLocator)
+        let result = await evaluateAsyncScript("return await continuousWrapper.goTo(\(json));")
+        guard
+            navigationRequests.isCurrent(id),
+            case let .success(value) = result,
+            let scrolled = value as? Bool,
+            scrolled
+        else {
+            return false
+        }
+        currentLocation = locator
+        delegate?.navigator(self, didJumpTo: locator)
         return true
+    }
+
+    /// The host calls this before replacing or tearing down a navigator. It is
+    /// intentionally public because an Expo promise may be waiting above this
+    /// controller's loading boundary.
+    public func cancelPendingNavigation() {
+        navigationRequests.cancelAll()
     }
 
     public func go(to link: Link, options: NavigatorGoOptions) async -> Bool {
