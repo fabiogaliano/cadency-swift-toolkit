@@ -17,7 +17,7 @@ import {
   chapterProgression,
   mostVisibleChapter,
   visibleWindowInChapter,
-} from "./visible-locator";
+} from "./cadency/continuous/visible-locator";
 
 // Polyfill for ResizeObserver on older iOS versions
 import { ResizeObserver as ResizeObserverPolyfill } from "@juggle/resize-observer";

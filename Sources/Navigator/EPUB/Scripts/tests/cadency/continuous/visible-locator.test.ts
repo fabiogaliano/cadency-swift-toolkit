@@ -4,11 +4,11 @@ import {
   chapterProgression,
   mostVisibleChapter,
   visibleWindowInChapter,
-} from "../src/visible-locator";
+} from "../../../src/cadency/continuous/visible-locator";
 
 // Viewport-relative rect helper: `top` is the chapter top's distance from
 // the viewport top (negative once scrolled past it).
-function rect(top, height) {
+function rect(top: number, height: number) {
   return { top, height, bottom: top + height };
 }
 
@@ -92,7 +92,7 @@ describe("chapterAtViewportTop", () => {
       { spineIndex: 4, rect: rect(300, 1000) },
     ];
 
-    expect(chapterAtViewportTop(chapters, viewportHeight).spineIndex).toBe(3);
+    expect(chapterAtViewportTop(chapters, viewportHeight)?.spineIndex).toBe(3);
   });
 
   it("moves to the incoming chapter once the outgoing tail leaves", () => {
@@ -101,7 +101,7 @@ describe("chapterAtViewportTop", () => {
       { spineIndex: 4, rect: rect(0, 1000) },
     ];
 
-    expect(chapterAtViewportTop(chapters, viewportHeight).spineIndex).toBe(4);
+    expect(chapterAtViewportTop(chapters, viewportHeight)?.spineIndex).toBe(4);
   });
 
   it("picks the first visible chapter when none covers the viewport top", () => {
@@ -110,7 +110,7 @@ describe("chapterAtViewportTop", () => {
       { spineIndex: 4, rect: rect(200, 200) },
     ];
 
-    expect(chapterAtViewportTop(chapters, viewportHeight).spineIndex).toBe(4);
+    expect(chapterAtViewportTop(chapters, viewportHeight)?.spineIndex).toBe(4);
   });
 });
 
@@ -136,7 +136,7 @@ describe("mostVisibleChapter", () => {
       // Fills the remaining 500px of the viewport.
       { spineIndex: 4, rect: rect(300, 1000) },
     ];
-    expect(mostVisibleChapter(chapters, viewportHeight).spineIndex).toBe(4);
+    expect(mostVisibleChapter(chapters, viewportHeight)?.spineIndex).toBe(4);
   });
 
   it("counts only the visible portion, not the chapter height", () => {
@@ -146,7 +146,7 @@ describe("mostVisibleChapter", () => {
       // Small chapter fully visible: 400px.
       { spineIndex: 1, rect: rect(100, 400) },
     ];
-    expect(mostVisibleChapter(chapters, viewportHeight).spineIndex).toBe(1);
+    expect(mostVisibleChapter(chapters, viewportHeight)?.spineIndex).toBe(1);
   });
 
   it("keeps the first of two equally visible chapters", () => {
@@ -154,6 +154,6 @@ describe("mostVisibleChapter", () => {
       { spineIndex: 1, rect: rect(0, 400) },
       { spineIndex: 2, rect: rect(400, 400) },
     ];
-    expect(mostVisibleChapter(chapters, viewportHeight).spineIndex).toBe(1);
+    expect(mostVisibleChapter(chapters, viewportHeight)?.spineIndex).toBe(1);
   });
 });

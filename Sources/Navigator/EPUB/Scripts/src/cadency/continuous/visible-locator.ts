@@ -8,15 +8,33 @@
 // functions over viewport-relative chapter rects so the per-settle path
 // stays testable without a DOM.
 
+/** Viewport-relative chapter rect, as read from `getBoundingClientRect()`. */
+interface ChapterRect {
+  top: number;
+  height: number;
+}
+
+/** The viewport-relative span of a chapter used for visibility comparisons. */
+interface ViewportSpan {
+  top: number;
+  bottom: number;
+}
+
+/** A chapter entry carrying at least its viewport span; callers attach more
+ * (spine index, iframe, ...) which these functions pass through untouched. */
+interface ChapterWithSpan {
+  rect: ViewportSpan;
+}
+
 /**
  * Fraction of the chapter scrolled above the viewport top, clamped to [0, 1].
  * This is the chapter-level `progression` of the current reading position:
  * 0 while the chapter top is still on or below the viewport top, 1 once the
  * chapter has fully scrolled past.
- * @param {{top: number, height: number}} rect - Viewport-relative chapter rect
- * @returns {number}
  */
-export function chapterProgression(rect) {
+export function chapterProgression(
+  rect: ChapterRect | null | undefined
+): number {
   if (!rect || !(rect.height > 0)) return 0;
   return Math.max(0, Math.min(1, -rect.top / rect.height));
 }
@@ -26,11 +44,11 @@ export function chapterProgression(rect) {
  * chapter's iframe is as tall as its content, so its own viewport can't
  * express "what the reader sees" — this translates the outer viewport
  * into the iframe's coordinate space instead.
- * @param {{top: number, height: number}} rect - Viewport-relative chapter rect
- * @param {number} viewportHeight
- * @returns {{top: number, bottom: number}}
  */
-export function visibleWindowInChapter(rect, viewportHeight) {
+export function visibleWindowInChapter(
+  rect: ChapterRect,
+  viewportHeight: number
+): ViewportSpan {
   const top = Math.max(0, -rect.top);
   const bottom = Math.min(rect.height, viewportHeight - rect.top);
   return { top, bottom: Math.max(top, bottom) };
@@ -40,12 +58,12 @@ export function visibleWindowInChapter(rect, viewportHeight) {
  * Pick the first chapter visible from the viewport top downward. Exact
  * persistence anchors what the reader has reached, even when the next chapter
  * occupies more of the screen below a chapter boundary.
- * @param {Array<{rect: {top: number, bottom: number}}>} chapters
- * @param {number} viewportHeight
- * @returns {Object|null} - The topmost visible entry, or null
  */
-export function chapterAtViewportTop(chapters, viewportHeight) {
-  let best = null;
+export function chapterAtViewportTop<T extends ChapterWithSpan>(
+  chapters: readonly T[],
+  viewportHeight: number
+): T | null {
+  let best: T | null = null;
   let bestVisibleTop = viewportHeight;
 
   for (const chapter of chapters) {
@@ -64,12 +82,12 @@ export function chapterAtViewportTop(chapters, viewportHeight) {
 
 /**
  * Pick the chapter occupying the most viewport height.
- * @param {Array<{rect: {top: number, bottom: number}}>} chapters
- * @param {number} viewportHeight
- * @returns {Object|null} - The winning entry, or null when nothing is visible
  */
-export function mostVisibleChapter(chapters, viewportHeight) {
-  let best = null;
+export function mostVisibleChapter<T extends ChapterWithSpan>(
+  chapters: readonly T[],
+  viewportHeight: number
+): T | null {
+  let best: T | null = null;
   let bestVisibility = 0;
 
   for (const chapter of chapters) {

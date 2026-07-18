@@ -89,8 +89,14 @@ export default defineConfig(({ command, mode }) => ({
       readium: "writable",
     },
     options: {
-      // Plan 006 supplies a real tsconfig; until then there is nothing for the
-      // type-aware path to read.
+      // A tsconfig.json exists now, but type-aware lint doesn't scope to its
+      // narrow `include` list - enabling it (tested empirically) type-checks
+      // vite.config.ts itself (implicit-any findings) and every untyped
+      // tests/*.js file (e.g. floating-promise warnings in
+      // pending-navigation.test.js) that Plan 006 hasn't touched yet. `tsc
+      // --noEmit` via `vp run typecheck` is the real, correctly-scoped gate;
+      // re-enable this only once type-aware lint can be pointed at just the
+      // converted files.
       typeAware: false,
       typeCheck: false,
     },
@@ -114,7 +120,7 @@ export default defineConfig(({ command, mode }) => ({
   },
 
   test: {
-    include: ["tests/**/*.test.js"],
+    include: ["tests/**/*.test.js", "tests/**/*.test.ts"],
   },
 
   run: {

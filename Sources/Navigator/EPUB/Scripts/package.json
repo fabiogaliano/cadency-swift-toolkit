@@ -9,9 +9,11 @@
     "test": "vp test",
     "lint": "vp lint",
     "checkformat": "vp fmt --check",
-    "format": "vp fmt"
+    "format": "vp fmt",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "typescript": "7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
     "vite-plus": "0.2.5"
   },
