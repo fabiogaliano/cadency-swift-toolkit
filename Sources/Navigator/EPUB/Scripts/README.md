@@ -28,7 +28,7 @@ Gotchas:
   explicitly when you actually intend to refresh the lock.
 - The parent has no `engine:verify` task on purpose — driving this package
   from a parent Vite Task leaks the parent's module resolution in, so tests
-  load `vite-plus-core` from the *parent's* `node_modules` and fail even
+  load `vite-plus-core` from the _parent's_ `node_modules` and fail even
   though they pass standalone. Keep the shell boundary.
 
 ## Types
