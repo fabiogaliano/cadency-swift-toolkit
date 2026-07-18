@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   findSpineIndexByHref,
   offsetInChapter,
-} from "../src/navigation-target";
+} from "../../../src/cadency/continuous/navigation-target";
 
 const spineItems = [
   { href: "text/part0001.html" },
@@ -41,12 +41,20 @@ describe("findSpineIndexByHref", () => {
 });
 
 describe("offsetInChapter", () => {
-  const element = (top) => ({ getBoundingClientRect: () => ({ top }) });
+  const element = (top: number) => ({
+    getBoundingClientRect: () => ({ top }),
+  });
 
-  function doc({ byId = {}, bySelector = {} } = {}) {
+  function doc({
+    byId = {},
+    bySelector = {},
+  }: {
+    byId?: Record<string, ReturnType<typeof element>>;
+    bySelector?: Record<string, ReturnType<typeof element>>;
+  } = {}) {
     return {
-      getElementById: (id) => byId[id] ?? null,
-      querySelector: (selector) => {
+      getElementById: (id: string) => byId[id] ?? null,
+      querySelector: (selector: string) => {
         if (selector === "!!!") throw new Error("invalid selector");
         return bySelector[selector] ?? null;
       },

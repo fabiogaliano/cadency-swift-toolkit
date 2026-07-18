@@ -7,16 +7,49 @@
 // Resolves a navigation target: which spine item a locator's href points at,
 // and where inside the chapter document the locator lands.
 
+/** A spine entry as configured by the native side; only `href` is read here. */
+interface NavigationSpineItem {
+  href: string;
+}
+
+/** The subset of a locator's `locations` this module resolves an offset from. */
+interface NavigationLocations {
+  cssSelector?: string;
+  fragments?: string[];
+  progression?: number;
+}
+
+interface NavigationLocator {
+  locations?: NavigationLocations;
+}
+
+/** An element as this module reads it: only the geometry it needs. */
+interface OffsetLookupElement {
+  getBoundingClientRect(): { top: number };
+}
+
+/**
+ * The chapter iframe's document, narrowed to the two lookups this module
+ * performs. A real `Document` satisfies this structurally; kept narrow
+ * (rather than the full `Document` type) so tests can pass a plain fake
+ * without an unsafe cast.
+ */
+interface OffsetLookupDocument {
+  querySelector(selector: string): OffsetLookupElement | null;
+  getElementById(id: string): OffsetLookupElement | null;
+}
+
 /**
  * Find the spine index matching an href.
  *
  * Spine hrefs are fragment-free file paths, but incoming hrefs may still
  * carry an anchor ("chapter.html#section") — compare file-to-file.
- * @param {Array} spineItems - Array of {href, url, ...}
- * @param {string} href
- * @returns {number} - Spine index, or -1
+ * @returns Spine index, or -1
  */
-export function findSpineIndexByHref(spineItems, href) {
+export function findSpineIndexByHref(
+  spineItems: readonly NavigationSpineItem[],
+  href: string | null
+): number {
   const target = (href || "").split("#")[0];
   if (!target) return -1;
 
@@ -39,12 +72,14 @@ export function findSpineIndexByHref(spineItems, href) {
  * Precedence: cssSelector (highlights carry one), then locations.fragments
  * (TOC anchors — calibre-split files hold several chapters, so landing at
  * file start would be the wrong chapter), then progression.
- * @param {Object} locator
- * @param {Document|null} doc - The chapter iframe's document
- * @param {number} chapterHeight - For progression-based offsets
- * @returns {number}
+ * @param doc - The chapter iframe's document
+ * @param chapterHeight - For progression-based offsets
  */
-export function offsetInChapter(locator, doc, chapterHeight) {
+export function offsetInChapter(
+  locator: NavigationLocator | null,
+  doc: OffsetLookupDocument | null,
+  chapterHeight: number
+): number {
   const locations = locator?.locations || {};
 
   if (doc) {

@@ -10,7 +10,10 @@
 import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
 import { createLandingCorrection } from "./landing-correction";
-import { findSpineIndexByHref, offsetInChapter } from "./navigation-target";
+import {
+  findSpineIndexByHref,
+  offsetInChapter,
+} from "./cadency/continuous/navigation-target";
 import { addUserEventListener, isUserEvent } from "./user-event";
 import {
   chapterAtViewportTop,
