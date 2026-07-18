@@ -11,7 +11,7 @@ import Testing
 /// The navigation state machine must never silently drop a jump requested
 /// before loading completes: the initial (restore) location and any `go()`
 /// during load become the pending locator, executed on load completion.
-struct EPUBContinuousNavigatorStateTests {
+enum EPUBContinuousNavigatorStateTests {
     typealias State = EPUBContinuousNavigatorViewController.State
 
     struct Loading {

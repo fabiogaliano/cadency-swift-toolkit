@@ -739,14 +739,16 @@ function beginUserScroll(now = Date.now()) {
 }
 
 function cancelLandingCorrectionFromUserInput(event) {
-  if (event && !isUserEvent(event)) return;
+  if (event && !isUserEvent(event)) return false;
 
   const hasLandingScrollPending = Date.now() < landingCorrectionScrollUntil;
-  if (!landingCorrection.cancelFromUserInput() && !hasLandingScrollPending) {
-    return;
+  const cancelledActiveCorrection = landingCorrection.cancelFromUserInput();
+  if (!cancelledActiveCorrection && !hasLandingScrollPending) {
+    return false;
   }
   landingCorrectionScrollUntil = 0;
   programmaticScrollUntil = 0;
+  return cancelledActiveCorrection;
 }
 
 function setupIframeUserInputCancellation(iframe) {

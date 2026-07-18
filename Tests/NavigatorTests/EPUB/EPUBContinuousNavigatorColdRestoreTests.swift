@@ -71,13 +71,13 @@ struct EPUBContinuousNavigatorColdRestoreTests {
         defer { harness.tearDown() }
 
         try await harness.startMidChapterJump()
-        let userPosition = try await harness.scrollAfterNativeInput()
+        try await harness.cancelLandingCorrectionAndTrackFurtherScrolls()
         try await Task.sleep(nanoseconds: 2_000_000_000)
-        let finalPosition = try await harness.currentScrollY()
+        let correctionScrolls = try await harness.finishTrackingLandingCorrectionScrolls()
 
         #expect(
-            abs(finalPosition - userPosition) <= 2,
-            "landing correction moved the reader after native input (\(userPosition) → \(finalPosition))"
+            correctionScrolls == 0,
+            "landing correction called window.scrollTo \(correctionScrolls) time(s) after native input"
         )
     }
 
@@ -169,7 +169,9 @@ struct EPUBContinuousNavigatorColdRestoreTests {
         let webView: WKWebView
         private let window: UIWindow
         private let log: DiagnosticsLog
-        private var diagnostics: [String] { log.lines }
+        private var diagnostics: [String] {
+            log.lines
+        }
 
         init(initialLocation: Locator?, preferences: EPUBPreferences = .empty) async throws {
             let log = DiagnosticsLog()
@@ -231,14 +233,10 @@ struct EPUBContinuousNavigatorColdRestoreTests {
             guard await navigator.go(to: locator, options: NavigatorGoOptions(animated: false)) else {
                 throw HarnessError("go(to: mid-chapter) was rejected")
             }
-            // go() can return with the jump still deferred: the readiness poll
-            // sees `readium` before the chapter's load event, so the precise
-            // scroll (and the landing correction) may only start once the
-            // chapter finishes loading. Wait for the goToScrolled trace so an
-            // interrupt targets an active correction, not a pending jump.
-            try await poll(timeout: 10, description: "goTo precise scroll") {
-                self.diagnostics.contains { $0.contains("goToScrolled") }
-            }
+            // Truthful go() completion means the precise scroll has run and
+            // landing correction has started before this returns. Waiting for a
+            // separately-delivered diagnostic lets the bounded correction finish
+            // under suite load before the cancellation can reach it.
         }
 
         func goToMidChapter() async throws {
@@ -317,20 +315,43 @@ struct EPUBContinuousNavigatorColdRestoreTests {
             return scrollY
         }
 
-        func scrollAfterNativeInput() async throws -> Double {
+        func cancelLandingCorrectionAndTrackFurtherScrolls() async throws {
             let result = try await evaluate(
                 """
                 (function () {
-                  continuousWrapper.cancelLandingCorrectionFromUserInput();
+                  var cancelled = continuousWrapper.cancelLandingCorrectionFromUserInput();
+                  window.__cadencyOriginalScrollTo = window.scrollTo;
+                  window.__cadencyPostCancelScrollToCount = 0;
+                  window.scrollTo = function () {
+                    window.__cadencyPostCancelScrollToCount += 1;
+                    return window.__cadencyOriginalScrollTo.apply(window, arguments);
+                  };
                   window.scrollBy(0, 300);
-                  return window.scrollY;
+                  return cancelled;
                 })()
                 """
             )
-            guard let scrollY = result as? Double else {
-                throw HarnessError("could not cancel landing correction from native input")
+            guard result as? Bool == true else {
+                throw HarnessError("landing correction was not active when native input cancelled it")
             }
-            return scrollY
+        }
+
+        func finishTrackingLandingCorrectionScrolls() async throws -> Double {
+            let result = try await evaluate(
+                """
+                (function () {
+                  var count = window.__cadencyPostCancelScrollToCount;
+                  window.scrollTo = window.__cadencyOriginalScrollTo;
+                  delete window.__cadencyOriginalScrollTo;
+                  delete window.__cadencyPostCancelScrollToCount;
+                  return count;
+                })()
+                """
+            )
+            guard let count = result as? Double else {
+                throw HarnessError("could not read post-cancellation scroll count")
+            }
+            return count
         }
 
         func currentScrollY() async throws -> Double {
@@ -352,7 +373,7 @@ struct EPUBContinuousNavigatorColdRestoreTests {
                     return sample == previous && !sample.hasPrefix("0/")
                 }
             } catch {
-                let debug = (try? await debugState(selector: nil)) ?? "n/a"
+                let debug = await (try? debugState(selector: nil)) ?? "n/a"
                 throw HarnessError("timed out waiting for scroll settle — \(debug)")
             }
         }
@@ -469,7 +490,9 @@ struct EPUBContinuousNavigatorColdRestoreTests {
 
     private struct HarnessError: Error, CustomStringConvertible {
         let description: String
-        init(_ description: String) { self.description = description }
+        init(_ description: String) {
+            self.description = description
+        }
     }
 }
 
