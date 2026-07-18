@@ -2,21 +2,24 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createPendingNavigation,
   MAX_ERROR_REMOUNTS,
-} from "../src/pending-navigation";
+  type ChapterLifecycleState,
+} from "../../../src/cadency/continuous/pending-navigation";
 
 const LOCATOR = { href: "chapter3.xhtml", locations: { progression: 0.5 } };
 
 // Fake chapter lifecycle: mounting flips a chapter to "loading"; the test
 // drives load/error events explicitly, the way the wrapper's iframe
 // listeners would.
-function createHarness(initialStates = {}) {
-  const states = new Map(
+function createHarness(
+  initialStates: Record<number, ChapterLifecycleState> = {}
+) {
+  const states = new Map<number, ChapterLifecycleState>(
     Object.entries(initialStates).map(([k, v]) => [Number(k), v])
   );
-  const mounts = [];
-  const scrolls = [];
-  const startJumps = [];
-  const logs = [];
+  const mounts: number[] = [];
+  const scrolls: Array<{ spineIndex: number; locator: unknown }> = [];
+  const startJumps: number[] = [];
+  const logs: string[] = [];
   let nowMs = 0;
 
   const nav = createPendingNavigation({
@@ -34,12 +37,12 @@ function createHarness(initialStates = {}) {
     now: () => nowMs,
   });
 
-  function loadChapter(spineIndex) {
+  function loadChapter(spineIndex: number) {
     states.set(spineIndex, "loaded");
     nav.chapterLoaded(spineIndex);
   }
 
-  function failChapter(spineIndex) {
+  function failChapter(spineIndex: number) {
     states.set(spineIndex, "error");
     nav.chapterFailed(spineIndex);
   }
@@ -53,7 +56,7 @@ function createHarness(initialStates = {}) {
     logs,
     loadChapter,
     failChapter,
-    advance: (ms) => (nowMs += ms),
+    advance: (ms: number) => (nowMs += ms),
   };
 }
 

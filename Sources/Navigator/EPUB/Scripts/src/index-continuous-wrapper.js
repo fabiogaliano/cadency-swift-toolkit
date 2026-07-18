@@ -8,7 +8,7 @@
 // This orchestrates multiple chapter iframes for vertical continuous scrolling.
 
 import { log } from "./utils";
-import { createPendingNavigation } from "./pending-navigation";
+import { createPendingNavigation } from "./cadency/continuous/pending-navigation";
 import { createLandingCorrection } from "./cadency/continuous/landing-correction";
 import {
   findSpineIndexByHref,
