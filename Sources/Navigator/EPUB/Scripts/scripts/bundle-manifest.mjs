@@ -22,12 +22,25 @@ export const BUNDLE_NAMES = Object.keys(BUNDLE_MODES).map(
   (mode) => `readium-${mode}.js`
 );
 
+export const BUNDLE_MAP_NAMES = BUNDLE_NAMES.map((name) => `${name}.map`);
+
+export const GENERATED_BUNDLE_NAMES = [...BUNDLE_NAMES, ...BUNDLE_MAP_NAMES];
+
 // Hand-authored static assets that permanently live in the bundle output
 // directory alongside the five generated IIFEs. `readium-continuous-wrapper-shim.js`
 // is loaded directly by WrapperPreparationEngine.swift by filename; it has no
 // src/ entry and is never produced by a bundler, so it is excluded from both
 // the verifier's exact-file check and the cleaner's deletion pass.
 export const STATIC_ASSET_NAMES = ["readium-continuous-wrapper-shim.js"];
+
+export const REQUIRED_OUTPUT_NAMES = [
+  ...GENERATED_BUNDLE_NAMES,
+  ...STATIC_ASSET_NAMES,
+];
+
+// Repository metadata may share the committed output directory, but build
+// output may not add any other files or chunks.
+export const OUTPUT_METADATA_NAMES = [".gitignore"];
 
 // Stable global-API markers proving each bundle actually initialized the
 // object Swift/HTML call into at runtime. These check source-level identifier
@@ -39,17 +52,23 @@ export const GLOBAL_MARKERS = {
   "readium-fixed-wrapper-one.js": /globalThis\.spread\s*=/,
   "readium-fixed-wrapper-two.js": /globalThis\.spread\s*=/,
   "readium-continuous-wrapper.js": /globalThis\.continuousWrapper\s*=/,
+  "readium-continuous-wrapper-shim.js": /cw\.applyDecorations\s*=/,
 };
 
-// Absolute, anchored at this module's own location rather than a bare
-// relative string. verify-bundles.mjs/clean-bundles.mjs live in Scripts/scripts/
-// but vite.config.ts lives one directory up in Scripts/; a relative string
-// here previously got resolved against *each caller's own* __dirname, so
-// vite.config.ts silently wrote every build one directory too high (into a
-// stray sibling of EPUB/, not EPUB/Assets/Static/scripts). Being absolute
-// makes path.resolve(callerDir, DEFAULT_OUT_DIR) return this same path no
-// matter which file combines it with its own __dirname.
+const SCRIPTS_ROOT = path.resolve(__dirname, "..");
+
+// Absolute, anchored at this module's own location rather than a caller's.
 export const DEFAULT_OUT_DIR = path.resolve(
-  __dirname,
-  "../../Assets/Static/scripts"
+  SCRIPTS_ROOT,
+  "../Assets/Static/scripts"
 );
+
+/**
+ * Resolves an optional output override relative to the Scripts project root.
+ * Every build/clean/verify caller must use this function so a relative
+ * BUNDLE_OUT_DIR cannot point each phase at a different directory.
+ * @param {string | undefined} requested
+ */
+export function resolveBundleOutDir(requested) {
+  return requested ? path.resolve(SCRIPTS_ROOT, requested) : DEFAULT_OUT_DIR;
+}

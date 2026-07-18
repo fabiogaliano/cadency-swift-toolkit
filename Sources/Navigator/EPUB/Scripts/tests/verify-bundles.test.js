@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { BUNDLE_NAMES, GLOBAL_MARKERS } from "../scripts/bundle-manifest";
+import {
+  BUNDLE_NAMES,
+  GLOBAL_MARKERS,
+  STATIC_ASSET_NAMES,
+} from "../scripts/bundle-manifest";
 import {
   BundleVerificationError,
   verifyBundles,
@@ -24,9 +28,25 @@ function makeTempOutDir() {
 
 function writeValidBundleSet(dir, { omit = [], extraEmpty = [] } = {}) {
   for (const name of BUNDLE_NAMES) {
-    if (omit.includes(name)) continue;
-    const content = extraEmpty.includes(name) ? "" : validContentFor(name);
-    writeFileSync(join(dir, name), content);
+    if (!omit.includes(name)) {
+      const content = extraEmpty.includes(name) ? "" : validContentFor(name);
+      writeFileSync(join(dir, name), content);
+    }
+
+    const mapName = `${name}.map`;
+    if (!omit.includes(mapName)) {
+      const content = extraEmpty.includes(mapName) ? "" : '{"version":3}';
+      writeFileSync(join(dir, mapName), content);
+    }
+  }
+
+  for (const name of STATIC_ASSET_NAMES) {
+    if (!omit.includes(name)) {
+      const content = extraEmpty.includes(name)
+        ? ""
+        : "var cw = {}; cw.applyDecorations = function () {};";
+      writeFileSync(join(dir, name), content);
+    }
   }
 }
 
@@ -39,7 +59,7 @@ afterEach(() => {
 });
 
 describe("verifyBundles", () => {
-  it("passes when the output dir has exactly the five expected bundles", () => {
+  it("passes with exactly five bundles and five source maps", () => {
     const dir = makeTempOutDir();
     tempDirs.push(dir);
     writeValidBundleSet(dir);
@@ -52,17 +72,30 @@ describe("verifyBundles", () => {
     }
   });
 
-  it("passes when the known static shim sits alongside the five bundles", () => {
+  it("fails when the required static shim is missing", () => {
     const dir = makeTempOutDir();
     tempDirs.push(dir);
-    writeValidBundleSet(dir);
-    // Hand-authored, never regenerated - must not be mistaken for drift.
-    writeFileSync(
-      join(dir, "readium-continuous-wrapper-shim.js"),
-      "(function () {})();"
-    );
+    writeValidBundleSet(dir, {
+      omit: ["readium-continuous-wrapper-shim.js"],
+    });
 
-    expect(() => verifyBundles(dir)).not.toThrow();
+    expect(() => verifyBundles(dir)).toThrow(BundleVerificationError);
+    expect(() => verifyBundles(dir)).toThrow(
+      /readium-continuous-wrapper-shim\.js/
+    );
+  });
+
+  it("fails when the required static shim is empty", () => {
+    const dir = makeTempOutDir();
+    tempDirs.push(dir);
+    writeValidBundleSet(dir, {
+      extraEmpty: ["readium-continuous-wrapper-shim.js"],
+    });
+
+    expect(() => verifyBundles(dir)).toThrow(BundleVerificationError);
+    expect(() => verifyBundles(dir)).toThrow(
+      /readium-continuous-wrapper-shim\.js is empty/
+    );
   });
 
   it("fails when one expected bundle is missing", () => {
@@ -74,6 +107,15 @@ describe("verifyBundles", () => {
     expect(() => verifyBundles(dir)).toThrow(/readium-fixed\.js/);
   });
 
+  it("fails when an expected source map is missing", () => {
+    const dir = makeTempOutDir();
+    tempDirs.push(dir);
+    writeValidBundleSet(dir, { omit: ["readium-fixed.js.map"] });
+
+    expect(() => verifyBundles(dir)).toThrow(BundleVerificationError);
+    expect(() => verifyBundles(dir)).toThrow(/readium-fixed\.js\.map/);
+  });
+
   it("fails when an unexpected hashed chunk is present", () => {
     const dir = makeTempOutDir();
     tempDirs.push(dir);
@@ -82,6 +124,16 @@ describe("verifyBundles", () => {
 
     expect(() => verifyBundles(dir)).toThrow(BundleVerificationError);
     expect(() => verifyBundles(dir)).toThrow(/unexpected/);
+  });
+
+  it("fails when an unexpected non-JavaScript asset is present", () => {
+    const dir = makeTempOutDir();
+    tempDirs.push(dir);
+    writeValidBundleSet(dir);
+    writeFileSync(join(dir, "readium-fixed.css"), "/* unexpected */");
+
+    expect(() => verifyBundles(dir)).toThrow(BundleVerificationError);
+    expect(() => verifyBundles(dir)).toThrow(/readium-fixed\.css/);
   });
 
   it("fails when an expected bundle is empty", () => {

@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 // Fails the build unless the bundle output directory contains exactly the
-// five committed readium-*.js artifacts (plus the known static shim), each
-// non-empty and each carrying its documented global-API marker. Guards
-// against silently shipping a hashed/code-split chunk name that Swift/HTML
-// wouldn't know how to load.
+// five fixed-name IIFEs and their five source maps, plus known static assets
+// and repository metadata. Every generated file must be non-empty, and each
+// IIFE must carry its documented global-API marker.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUNDLE_NAMES,
-  DEFAULT_OUT_DIR,
+  GENERATED_BUNDLE_NAMES,
   GLOBAL_MARKERS,
+  OUTPUT_METADATA_NAMES,
+  REQUIRED_OUTPUT_NAMES,
   STATIC_ASSET_NAMES,
+  resolveBundleOutDir,
 } from "./bundle-manifest.mjs";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class BundleVerificationError extends Error {}
 
@@ -23,8 +23,7 @@ export class BundleVerificationError extends Error {}
 // rehearsal build can point this at a disposable directory instead of the
 // real committed assets.
 export function resolveOutDir(argv = process.argv.slice(2), env = process.env) {
-  const requested = argv[0] || env.BUNDLE_OUT_DIR || DEFAULT_OUT_DIR;
-  return path.resolve(__dirname, requested);
+  return resolveBundleOutDir(argv[0] || env.BUNDLE_OUT_DIR);
 }
 
 // Throws BundleVerificationError on any violation; otherwise returns the
@@ -37,31 +36,38 @@ export function verifyBundles(outDir) {
   }
 
   const entries = readdirSync(outDir);
-  const jsFiles = entries.filter((name) => name.endsWith(".js"));
-  const allowed = new Set([...BUNDLE_NAMES, ...STATIC_ASSET_NAMES]);
+  const allowed = new Set([
+    ...GENERATED_BUNDLE_NAMES,
+    ...STATIC_ASSET_NAMES,
+    ...OUTPUT_METADATA_NAMES,
+  ]);
 
   const errors = [];
 
-  const missing = BUNDLE_NAMES.filter((name) => !jsFiles.includes(name));
+  const missing = REQUIRED_OUTPUT_NAMES.filter(
+    (name) => !entries.includes(name)
+  );
   if (missing.length > 0) {
-    errors.push(`missing bundle(s): ${missing.join(", ")}`);
+    errors.push(`missing generated file(s): ${missing.join(", ")}`);
   }
 
-  const unexpected = jsFiles.filter((name) => !allowed.has(name));
+  const unexpected = entries.filter((name) => !allowed.has(name));
   if (unexpected.length > 0) {
     errors.push(
-      `unexpected .js file(s): ${unexpected.join(", ")} ` +
-        `(hashed names and extra chunks are not allowed; only ${BUNDLE_NAMES.join(
-          ", "
-        )} and the static ${STATIC_ASSET_NAMES.join(", ")} may live in ${outDir})`
+      `unexpected output entry or chunk(s): ${unexpected.join(", ")}`
     );
   }
 
-  for (const name of BUNDLE_NAMES) {
-    if (!jsFiles.includes(name)) continue; // already reported above
+  for (const name of REQUIRED_OUTPUT_NAMES) {
+    if (!entries.includes(name)) continue; // already reported above
 
     const filePath = path.join(outDir, name);
-    if (statSync(filePath).size === 0) {
+    const stats = statSync(filePath);
+    if (!stats.isFile()) {
+      errors.push(`${name} is not a file`);
+      continue;
+    }
+    if (stats.size === 0) {
       errors.push(`${name} is empty (0 bytes)`);
       continue;
     }

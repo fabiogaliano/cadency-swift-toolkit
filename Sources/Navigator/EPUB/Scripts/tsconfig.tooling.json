@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "strict": true,
+    "noEmit": true,
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "forceConsistentCasingInFileNames": true,
+    // Vite+ exposes optional pack/devtools peer declarations that this package
+    // does not install. The tooling gate checks our config and manifest while
+    // the source gate keeps skipLibCheck=false for owned declaration seams.
+    "skipLibCheck": true
+  },
+  "include": ["vite.config.ts", "scripts/bundle-manifest.mjs"]
+}

@@ -112,6 +112,9 @@ jobs:
       - name: Check
         working-directory: ${{ env.scripts }}
         run: vp check
+      - name: Typecheck
+        working-directory: ${{ env.scripts }}
+        run: vp run typecheck
       - name: Test
         working-directory: ${{ env.scripts }}
         run: vp test

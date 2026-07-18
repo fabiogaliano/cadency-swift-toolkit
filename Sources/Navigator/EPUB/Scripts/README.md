@@ -33,10 +33,13 @@ Gotchas:
 
 ## Types
 
-`tsconfig.json` is a strict, non-empty `tsc --noEmit` gate (`strict: true`,
-`skipLibCheck: false` — it was silently masking broken declarations in our
-own `src/types/*.d.ts`, not just dependency noise). TypeScript is pinned
-exactly at `7.0.2` (no `^`).
+`tsconfig.json` is a strict, non-empty `tsc --noEmit` source gate (`strict:
+true`, `skipLibCheck: false` — it was silently masking broken declarations in
+our own `src/types/*.d.ts`, not just dependency noise). `tsconfig.tooling.json`
+separately checks `vite.config.ts` and the bundle manifest; it skips dependency
+declarations because Vite+ publishes references to optional pack/devtools peers
+this package does not install. `vp run typecheck` runs both gates. TypeScript is
+pinned exactly at `7.0.2` (no `^`).
 
 Only Cadency-owned, behaviorally-tested leaf modules are converted, under
 `src/cadency/continuous/` and `src/cadency/interaction/`. Upstream/vendor
@@ -54,6 +57,8 @@ stays disabled — it doesn't scope to `tsconfig.json`'s narrow `include`
 list and reaches the whole package instead (confirmed empirically).
 `tsc --noEmit` via `vp run typecheck` is the real, correctly-scoped gate.
 
-Baselines as of the last engine-wide gate run: 80 tests across 7 files
-(74 source + 6 bundle-verifier), 5 committed bundles, `vp check` clean
-across 41 formatted / 37 linted files.
+Baselines as of the last engine-wide gate run: 86 tests across 8 files
+(74 source + 12 bundle/config contract), 5 committed bundles with 5 generated
+source maps, `vp check` clean across 43 formatted / 38 linted files. Targeted
+live-WKWebView coverage executes the fixed, fixed-wrapper, reflowable selection,
+continuous decoration-shim, and block-activation paths from committed bundles.

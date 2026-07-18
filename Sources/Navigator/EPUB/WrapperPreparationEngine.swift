@@ -271,7 +271,10 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
         // wrapper's `applyDecorationsToIframe` silently no-ops. The guard
         // ensures the main wrapper frame keeps its own `window.readium`.
         if let reflowable = Self.reflowableScript {
-            let subframeOnly = "if (window.top !== window.self) {\n\(reflowable)\n}"
+            // Imported modules inspect `window.readium` while the bundle is
+            // initializing, before index.js publishes the final API object.
+            // Seed it first so selection/progression listeners are installed.
+            let subframeOnly = "if (window.top !== window.self) {\nwindow.readium = window.readium || {};\n\(reflowable)\n}"
             webView.configuration.userContentController.addUserScript(
                 WKUserScript(
                     source: subframeOnly,
@@ -316,7 +319,7 @@ public final class WrapperPreparationEngine: NSObject, Loggable {
 
     private static let wrapperShimScript: String? = bundledScript("readium-continuous-wrapper-shim")
 
-    private static func bundledScript(_ name: String) -> String? {
+    static func bundledScript(_ name: String) -> String? {
         Bundle.module
             .url(forResource: name, withExtension: "js", subdirectory: "Assets/Static/scripts")
             .flatMap { try? String(contentsOf: $0) }

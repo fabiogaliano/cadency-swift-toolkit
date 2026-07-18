@@ -4,7 +4,7 @@ help:
 	@echo "Usage: make <target>\n\n\
 	  playground\t\tGenerate the Playground project\n\
 	  podspecs\t\tGenerate the CocoaPods podspecs\n\
-	  scripts\t\tBundle the Navigator EPUB scripts (full: install + lint + bundle)\n\
+	  scripts\t\tVerify and bundle the Navigator EPUB scripts\n\
 	  bundle\t\tBundle the Navigator EPUB scripts (quick: bundle only)\n\
 	  test\t\t\tRun unit tests\n\
 	  lint-format\t\tVerify formatting\n\
@@ -35,9 +35,11 @@ navigator-ui-tests-project:
 scripts:
 	@which vp >/dev/null 2>&1 || (echo "ERROR: Vite+ is required, please install it first\nhttps://viteplus.dev"; exit 1)
 
-	cd $(SCRIPTS_PATH); \
-	vp install --frozen-lockfile; \
-	vp check; \
+	cd $(SCRIPTS_PATH) && \
+	vp install --frozen-lockfile && \
+	vp check && \
+	vp run typecheck && \
+	vp test && \
 	vp run bundle
 
 .PHONY: bundle

@@ -89,6 +89,50 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
         #expect(harness.navigator.currentSelection == nil, "a spoofed selection must not surface as a real selection")
     }
 
+    @Test @MainActor func liveBundleBuildsAndPostsBlockActivation() async throws {
+        let harness = try await Harness(allowsAuthoredScripts: false)
+        defer { harness.tearDown() }
+
+        let result = try await harness.activateFirstParagraphBlock()
+        #expect(result == "posted")
+        try await harness.waitForBlockActivation()
+
+        let activation = try #require(harness.spy.blockActivations.first)
+        #expect(activation.locator.href.string == "chapter1.xhtml")
+        #expect(activation.locator.text.highlight == "Paragraph 1 of Chapter 1.")
+    }
+
+    @Test @MainActor func liveBundlePostsSelectionFromChapter() async throws {
+        let harness = try await Harness(allowsAuthoredScripts: false)
+        defer { harness.tearDown() }
+
+        try await harness.selectFirstParagraph()
+        try await harness.waitForSelection()
+
+        #expect(harness.navigator.currentSelection?.locator.text.highlight == "Paragraph 1 of Chapter 1.")
+    }
+
+    @Test @MainActor func liveBundleRendersDecorationThroughWrapperShim() async throws {
+        let harness = try await Harness(allowsAuthoredScripts: false)
+        defer { harness.tearDown() }
+
+        let href = try #require(AnyURL(string: "chapter1.xhtml"))
+        let locator = Locator(
+            href: href,
+            mediaType: .xhtml,
+            locations: .init(
+                otherLocations: ["cssSelector": .string("body > p:nth-of-type(1)")]
+            ),
+            text: .init(highlight: "Paragraph 1 of Chapter 1.")
+        )
+        harness.navigator.apply(
+            decorations: [Decoration(id: "live-decoration", locator: locator, style: .highlight())],
+            in: "live-bundle"
+        )
+
+        try await harness.waitForDecoration()
+    }
+
     // MARK: - Harness
 
     @MainActor
@@ -148,6 +192,71 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
         func tearDown() {
             window.isHidden = true
             window.rootViewController = nil
+        }
+
+        func activateFirstParagraphBlock() async throws -> String? {
+            try await evaluate(
+                """
+                (function () {
+                  var f = document.querySelector('iframe.chapter-iframe');
+                  var p = f && f.contentDocument && f.contentDocument.querySelector('p');
+                  if (!p) return 'missing-paragraph';
+                  var fr = f.getBoundingClientRect();
+                  var pr = p.getBoundingClientRect();
+                  return continuousWrapper.activateBlockAtPoint(
+                    fr.left + pr.left + Math.min(10, pr.width / 2),
+                    fr.top + pr.top + Math.min(10, pr.height / 2)
+                  );
+                })()
+                """
+            ) as? String
+        }
+
+        func waitForBlockActivation() async throws {
+            try await poll(timeout: 10, description: "block activation message") {
+                !self.spy.blockActivations.isEmpty
+            }
+        }
+
+        func selectFirstParagraph() async throws {
+            _ = try await evaluate(
+                """
+                (function () {
+                  var f = document.querySelector('iframe.chapter-iframe');
+                  var doc = f && f.contentDocument;
+                  var p = doc && doc.querySelector('p');
+                  if (!p) return false;
+                  var range = doc.createRange();
+                  range.selectNodeContents(p);
+                  var selection = f.contentWindow.getSelection();
+                  selection.removeAllRanges();
+                  selection.addRange(range);
+                  doc.dispatchEvent(new Event('selectionchange'));
+                  return true;
+                })()
+                """
+            )
+        }
+
+        func waitForSelection() async throws {
+            try await poll(timeout: 10, description: "selection bridge message") {
+                self.navigator.currentSelection != nil
+            }
+        }
+
+        func waitForDecoration() async throws {
+            try await poll(timeout: 10, description: "decoration rendered in chapter") {
+                let rendered = try await self.evaluate(
+                    """
+                    (function () {
+                      var f = document.querySelector('iframe.chapter-iframe');
+                      return !!(f && f.contentDocument &&
+                        f.contentDocument.querySelector('[data-style="highlight"]'));
+                    })()
+                    """
+                )
+                return (rendered as? Bool) == true
+            }
         }
 
         /// Reads an attribute the authored script wrote on the chapter's
@@ -210,7 +319,7 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
                 if try await condition() { return }
                 try await Task.sleep(nanoseconds: 200_000_000)
             }
-            let probe = (try? await evaluate(
+            let probe = await (try? evaluate(
                 """
                 (function () {
                   var f = document.querySelector('iframe');
@@ -230,7 +339,9 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
 
     private struct HarnessError: Error, CustomStringConvertible {
         let description: String
-        init(_ description: String) { self.description = description }
+        init(_ description: String) {
+            self.description = description
+        }
     }
 }
 
