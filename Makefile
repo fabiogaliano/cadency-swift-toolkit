@@ -33,24 +33,21 @@ navigator-ui-tests-project:
 
 .PHONY: scripts
 scripts:
-	@which corepack >/dev/null 2>&1 || (echo "ERROR: corepack is required, please install it first\nhttps://pnpm.io/installation#using-corepack"; exit 1)
+	@which vp >/dev/null 2>&1 || (echo "ERROR: Vite+ is required, please install it first\nhttps://viteplus.dev"; exit 1)
 
 	cd $(SCRIPTS_PATH); \
-	rm -rf "node_modules"; \
-	corepack install; \
-	pnpm install --frozen-lockfile; \
-	pnpm run format; \
-	pnpm run lint; \
-	pnpm run bundle
+	vp install --frozen-lockfile; \
+	vp check; \
+	vp run bundle
 
 .PHONY: bundle
 bundle:
-	cd $(SCRIPTS_PATH) && pnpm run bundle
+	cd $(SCRIPTS_PATH) && vp run bundle
 
 .PHONY: update-scripts
 update-scripts:
-	@which corepack >/dev/null 2>&1 || (echo "ERROR: corepack is required, please install it first\nhttps://pnpm.io/installation#using-corepack"; exit 1)
-	pnpm install --dir "$(SCRIPTS_PATH)"
+	@which vp >/dev/null 2>&1 || (echo "ERROR: Vite+ is required, please install it first\nhttps://viteplus.dev"; exit 1)
+	cd $(SCRIPTS_PATH) && vp install
 
 .PHONY: lint-format
 lint-format:

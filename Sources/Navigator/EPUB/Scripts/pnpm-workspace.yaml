@@ -1,0 +1,6 @@
+# Standalone project root. This package lives inside the Cadency superproject's
+# directory tree, so without this file pnpm walks up, finds the parent's
+# workspace, and installs that instead of this package. The engine is an
+# upstream-derived submodule with its own lock and merge lifecycle — never a
+# member of the parent workspace.
+packages: []

@@ -101,29 +101,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
         with:
-          package_json_file: Sources/Navigator/EPUB/Scripts/package.json
-          run_install: false
-      - name: Setup cache
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
-          cache: 'pnpm'
-          cache-dependency-path: Sources/Navigator/EPUB/Scripts/pnpm-lock.yaml
+          node-version: '24'
+          cache: true
       - name: Install dependencies
-        run: pnpm --dir "$scripts" install --frozen-lockfile
+        working-directory: ${{ env.scripts }}
+        run: vp install --frozen-lockfile
+      - name: Check
+        working-directory: ${{ env.scripts }}
+        run: vp check
       - name: Test
-        run: pnpm --dir "$scripts" run test
-      - name: Lint
-        run: pnpm --dir "$scripts" run lint
-      - name: Check formatting
-        run: pnpm --dir "$scripts" run checkformat
+        working-directory: ${{ env.scripts }}
+        run: vp test
+      # Bundles directly rather than via `make scripts` so no install/format
+      # cycle can rewrite sources and mask drift before the diff below.
+      - name: Bundle
+        working-directory: ${{ env.scripts }}
+        run: vp run bundle
       - name: Check if bundled scripts are up-to-date
-        run: |
-            make scripts
-            git diff --exit-code --name-only Sources/Navigator/EPUB/Assets/Static/scripts/*.js
+        run: git diff --exit-code --name-only Sources/Navigator/EPUB/Assets/Static/scripts/*.js
       - name: Lint Swift formatting
         run: make lint-format
 
