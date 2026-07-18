@@ -19,7 +19,13 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    // Off, not the conventional default: this narrow `include` never pulls in
+    // dependency .d.ts files, so there's no third-party noise to silence -
+    // and skipLibCheck also covers our OWN src/types/*.d.ts. Verified by
+    // probe: an invalid type reference inside webkit.d.ts (a typo'd handler
+    // type) was silently accepted with skipLibCheck true and correctly
+    // rejected (TS2304) once false, with zero new errors elsewhere.
+    "skipLibCheck": false
   },
   "include": [
     "src/cadency/**/*.ts",
