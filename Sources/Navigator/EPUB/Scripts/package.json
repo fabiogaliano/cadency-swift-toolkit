@@ -6,7 +6,7 @@
   "license": "BSD-3-Clause",
   "private": true,
   "scripts": {
-    "bundle": "webpack",
+    "bundle:webpack": "webpack",
     "test": "vp test",
     "lint": "vp lint",
     "checkformat": "vp fmt --check",
