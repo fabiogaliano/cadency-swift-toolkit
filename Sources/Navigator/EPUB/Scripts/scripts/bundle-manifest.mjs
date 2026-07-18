@@ -2,6 +2,10 @@
 // vite.config.ts, verify-bundles.mjs, and clean-bundles.mjs all import this
 // so the mode list, output names, and static exceptions can never drift
 // apart from each other.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Closed map of build mode -> entry module. Any mode outside this map (or a
 // missing/default mode) must fail loudly rather than silently building one
@@ -37,6 +41,15 @@ export const GLOBAL_MARKERS = {
   "readium-continuous-wrapper.js": /globalThis\.continuousWrapper\s*=/,
 };
 
-// Relative to Scripts/scripts/ (where this module and its callers live),
-// i.e. Scripts/scripts/../../Assets/Static/scripts.
-export const DEFAULT_OUT_DIR = "../../Assets/Static/scripts";
+// Absolute, anchored at this module's own location rather than a bare
+// relative string. verify-bundles.mjs/clean-bundles.mjs live in Scripts/scripts/
+// but vite.config.ts lives one directory up in Scripts/; a relative string
+// here previously got resolved against *each caller's own* __dirname, so
+// vite.config.ts silently wrote every build one directory too high (into a
+// stray sibling of EPUB/, not EPUB/Assets/Static/scripts). Being absolute
+// makes path.resolve(callerDir, DEFAULT_OUT_DIR) return this same path no
+// matter which file combines it with its own __dirname.
+export const DEFAULT_OUT_DIR = path.resolve(
+  __dirname,
+  "../../Assets/Static/scripts"
+);

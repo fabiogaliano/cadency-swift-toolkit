@@ -6,24 +6,14 @@
   "license": "BSD-3-Clause",
   "private": true,
   "scripts": {
-    "bundle:webpack": "webpack",
     "test": "vp test",
     "lint": "vp lint",
     "checkformat": "vp fmt --check",
     "format": "vp fmt"
   },
-  "browserslist": [
-    "iOS 13"
-  ],
   "devDependencies": {
-    "@babel/core": "^7.29.7",
-    "@babel/preset-env": "^7.29.7",
-    "@babel/preset-typescript": "^7.29.7",
-    "babel-loader": "^8.4.1",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
-    "vite-plus": "0.2.5",
-    "webpack": "5.107.2",
-    "webpack-cli": "^5.1.4"
+    "vite-plus": "0.2.5"
   },
   "dependencies": {
     "@juggle/resize-observer": "^3.4.0",
