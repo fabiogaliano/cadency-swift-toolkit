@@ -9,7 +9,7 @@
 
 import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
-import { createLandingCorrection } from "./landing-correction";
+import { createLandingCorrection } from "./cadency/continuous/landing-correction";
 import {
   findSpineIndexByHref,
   offsetInChapter,

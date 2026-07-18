@@ -1,20 +1,23 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createLandingCorrection } from "../src/landing-correction";
+import {
+  createLandingCorrection,
+  type LandingCorrectionOptions,
+} from "../../../src/cadency/continuous/landing-correction";
 
 function frameHarness() {
   let nextId = 1;
-  const frames = new Map();
+  const frames = new Map<number, () => void>();
   return {
-    requestFrame(callback) {
+    requestFrame(callback: () => void): number {
       const id = nextId;
       nextId += 1;
       frames.set(id, callback);
       return id;
     },
-    cancelFrame(id) {
+    cancelFrame(id: number): void {
       frames.delete(id);
     },
-    runNext() {
+    runNext(): boolean {
       const next = frames.entries().next().value;
       if (!next) return false;
       const [id, callback] = next;
@@ -22,13 +25,13 @@ function frameHarness() {
       callback();
       return true;
     },
-    get pendingCount() {
+    get pendingCount(): number {
       return frames.size;
     },
   };
 }
 
-function setup(overrides = {}) {
+function setup(overrides: Partial<LandingCorrectionOptions> = {}) {
   const frames = frameHarness();
   const scrollTo = vi.fn();
   const onExhausted = vi.fn();
@@ -74,7 +77,7 @@ describe("landing correction", () => {
   });
 
   it("re-resolves and corrects drift while geometry is settling", () => {
-    let target = 400;
+    let target: number | null = 400;
     const { correction, frames, scrollTo } = setup({
       resolveTarget: () => target,
     });
@@ -104,7 +107,7 @@ describe("landing correction", () => {
   });
 
   it("reports active from start until it stops, so scroll heuristics can defer to it", () => {
-    let target = 400;
+    let target: number | null = 400;
     const { correction, frames } = setup({
       getScrollY: () => 400,
       resolveTarget: () => target,
@@ -139,7 +142,7 @@ describe("landing correction", () => {
   });
 
   it("keeps retrying while the target is unresolvable and lands once it appears", () => {
-    let target = null;
+    let target: number | null = null;
     const { correction, frames, scrollTo } = setup({
       resolveTarget: () => target,
     });

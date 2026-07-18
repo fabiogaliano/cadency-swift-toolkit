@@ -4,6 +4,35 @@
 //  available in the top-level LICENSE file of the project.
 //
 
+export interface LandingCorrectionOptions {
+  /** Re-resolves the scroll target; null means "not resolvable yet". */
+  resolveTarget: (spineIndex: number, locator: unknown) => number | null;
+  getScrollY: () => number;
+  scrollTo: (target: number) => void;
+  requestFrame: (callback: () => void) => number;
+  cancelFrame: (frameId: number) => void;
+  shouldCancel?: () => boolean;
+  onExhausted: (drift: number) => void;
+  maxFrames?: number;
+  tolerance?: number;
+}
+
+interface LandingCorrection {
+  cancel(): void;
+  cancelFromUserInput(): boolean;
+  isActive(): boolean;
+  start(spineIndex: number, locator: unknown): void;
+  /** Spine index still being corrected toward, or null when idle. */
+  targetIndex(): number | null;
+}
+
+/** The in-flight correction's per-run bookkeeping; `active` is null when idle. */
+interface ActiveCorrection {
+  framesLeft: number;
+  frameId: number;
+  spineIndex: number;
+}
+
 /**
  * Re-resolves a navigation target while chapter geometry settles.
  *
@@ -20,33 +49,37 @@ export function createLandingCorrection({
   onExhausted,
   maxFrames = 90,
   tolerance = 1,
-}) {
-  let active = null;
+}: LandingCorrectionOptions): LandingCorrection {
+  let active: ActiveCorrection | null = null;
 
-  function isActive() {
+  function isActive(): boolean {
     return active != null;
   }
 
   /** Spine index still being corrected toward, or null when idle. */
-  function targetIndex() {
+  function targetIndex(): number | null {
     return active?.spineIndex ?? null;
   }
 
-  function cancel() {
+  function cancel(): void {
     if (active == null) return;
     cancelFrame(active.frameId);
     active = null;
   }
 
-  function cancelFromUserInput() {
+  function cancelFromUserInput(): boolean {
     if (active == null) return false;
     cancel();
     return true;
   }
 
-  function start(spineIndex, locator) {
+  function start(spineIndex: number, locator: unknown): void {
     cancel();
-    const state = { framesLeft: maxFrames, frameId: 0, spineIndex };
+    const state: ActiveCorrection = {
+      framesLeft: maxFrames,
+      frameId: 0,
+      spineIndex,
+    };
     active = state;
 
     const check = () => {
@@ -61,7 +94,7 @@ export function createLandingCorrection({
       // fired before it was registered. Keep trying within the frame budget;
       // aborting here left cold restores stranded at the coarse spacer scroll.
       const target = resolveTarget(spineIndex, locator);
-      let drift = null;
+      let drift: number | null = null;
       if (target != null) {
         drift = Math.abs(getScrollY() - target);
         if (drift > tolerance) scrollTo(target);
