@@ -59,15 +59,3 @@ struct EPUBContinuousNavigatorLifecycleTests {
         )
     )
 }
-
-@MainActor private func findWebView(in view: UIView) -> WKWebView? {
-    var queue: [UIView] = [view]
-    while !queue.isEmpty {
-        let candidate = queue.removeFirst()
-        if let webView = candidate as? WKWebView {
-            return webView
-        }
-        queue.append(contentsOf: candidate.subviews)
-    }
-    return nil
-}

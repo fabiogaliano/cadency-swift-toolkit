@@ -22,6 +22,12 @@ import WebKit
 /// page world where authored JS lives has no access to the world-registered
 /// handlers or the wrapper API.
 ///
+/// The CSP claim is also checked for a scripted SVG content document. The
+/// HTML-only `<meta>` injection cannot reach SVG, and a CSP does not inherit
+/// into framed documents fetched over the scheme, so the chapter embeds the
+/// SVG in an iframe — only the response-header CSP on the SVG's own response
+/// can stop its script.
+///
 /// The authored script records what it saw into DOM attributes on the chapter's
 /// `<html>`. The DOM is shared across content worlds (only JS scopes are
 /// isolated), so the harness reads those attributes back through
@@ -35,6 +41,14 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
 
         let ran = try await harness.chapterAttribute("data-hostile-ran")
         #expect(ran == nil, "the script-src 'none' CSP must stop the authored chapter script from running")
+
+        // The harness already waited for the SVG document to load (its static
+        // marker attribute), so an absent `ran` flag means the script was
+        // blocked, not that the document never arrived.
+        #expect(
+            try await harness.svgAttribute("data-hostile-ran") == nil,
+            "the response-header CSP must stop scripts in SVG content documents, which the HTML-only <meta> cannot reach"
+        )
 
         #expect(harness.spy.blockActivations.isEmpty)
         #expect(harness.spy.taps.isEmpty)
@@ -50,6 +64,11 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
 
         let ran = try await harness.chapterAttribute("data-hostile-ran")
         #expect(ran == "1", "with scripts allowed the authored script must run, or the attack check is vacuous")
+
+        #expect(
+            try await harness.svgAttribute("data-hostile-ran") == "1",
+            "with scripts allowed the SVG script must run, or the SVG CSP check is vacuous"
+        )
 
         #expect(
             try await harness.chapterAttribute("data-hostile-handlers") == "absent",
@@ -112,8 +131,11 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
                     (function () {
                       if (typeof continuousWrapper === 'undefined') return false;
                       var f = document.querySelector('iframe');
-                      return !!(f && f.contentDocument &&
-                        f.contentDocument.querySelector('p'));
+                      if (!(f && f.contentDocument &&
+                        f.contentDocument.querySelector('p'))) return false;
+                      var svg = f.contentDocument.querySelector('iframe');
+                      return !!(svg && svg.contentDocument &&
+                        svg.contentDocument.documentElement.getAttribute('data-hostile-svg'));
                     })()
                     """
                 )
@@ -138,6 +160,24 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
                   var f = document.querySelector('iframe');
                   if (!f || !f.contentDocument) return null;
                   return f.contentDocument.documentElement.getAttribute('\(name)');
+                })()
+                """
+            )
+            if result is NSNull { return nil }
+            return result as? String
+        }
+
+        /// Reads an attribute the SVG's script wrote on its own root, reached
+        /// through the shared DOM: chapter iframe → embedded SVG iframe.
+        func svgAttribute(_ name: String) async throws -> String? {
+            let result = try await evaluate(
+                """
+                (function () {
+                  var f = document.querySelector('iframe');
+                  if (!f || !f.contentDocument) return null;
+                  var svg = f.contentDocument.querySelector('iframe');
+                  if (!svg || !svg.contentDocument) return null;
+                  return svg.contentDocument.documentElement.getAttribute('\(name)');
                 })()
                 """
             )
@@ -261,6 +301,16 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
     </script>
     """
 
+    // A scripted SVG content document. The static `data-hostile-svg` marker
+    // proves the document loaded and parsed even when its script is blocked.
+    let hostileSVG = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-hostile-svg="static">
+      <rect width="100" height="100" fill="#eee"/>
+      <script>document.documentElement.setAttribute('data-hostile-ran', '1');</script>
+    </svg>
+    """
+
     func chapter(_ title: String) -> String {
         let paragraphs = (1 ... 30).map { "<p>Paragraph \($0) of \(title).</p>" }.joined(separator: "\n")
         return """
@@ -269,6 +319,7 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
         <head><title>\(title)</title></head>
         <body>
         \(hostileScript)
+        <iframe src="hostile.svg" style="width:100px;height:100px"></iframe>
         \(paragraphs)
         </body>
         </html>
@@ -283,6 +334,10 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
         SingleResourceContainer(
             resource: DataResource(string: chapter("Chapter 2")),
             at: AnyURL(string: "chapter2.xhtml")!
+        ),
+        SingleResourceContainer(
+            resource: DataResource(string: hostileSVG),
+            at: AnyURL(string: "hostile.svg")!
         )
     )
 
@@ -292,6 +347,9 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
             readingOrder: [
                 Link(href: "chapter1.xhtml", mediaType: .xhtml),
                 Link(href: "chapter2.xhtml", mediaType: .xhtml),
+            ],
+            resources: [
+                Link(href: "hostile.svg", mediaType: .svg),
             ]
         ),
         container: container
@@ -299,15 +357,3 @@ struct EPUBContinuousNavigatorHostileEPUBTests {
 }
 
 private let viewport = CGRect(x: 0, y: 0, width: 390, height: 844)
-
-@MainActor private func findWebView(in view: UIView) -> WKWebView? {
-    var queue: [UIView] = [view]
-    while !queue.isEmpty {
-        let candidate = queue.removeFirst()
-        if let webView = candidate as? WKWebView {
-            return webView
-        }
-        queue.append(contentsOf: candidate.subviews)
-    }
-    return nil
-}

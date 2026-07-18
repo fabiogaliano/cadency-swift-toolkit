@@ -5,8 +5,9 @@
 //
 
 import { findNearestInteractiveElement } from "./dom";
+import { addUserEventListener } from "./user-event";
 
-window.addEventListener("keydown", (event) => {
+addUserEventListener(window, "keydown", (event) => {
   if (shouldIgnoreEvent(event)) {
     return;
   }
@@ -15,7 +16,7 @@ window.addEventListener("keydown", (event) => {
   sendKeyEvent("down", event);
 });
 
-window.addEventListener("keyup", (event) => {
+addUserEventListener(window, "keyup", (event) => {
   if (shouldIgnoreEvent(event)) {
     return;
   }
@@ -26,10 +27,6 @@ window.addEventListener("keyup", (event) => {
 
 function shouldIgnoreEvent(event) {
   return (
-    // Only the user agent sets `isTrusted`; a synthetic key event from authored
-    // EPUB JS (which shares this same-origin DOM across the content-world
-    // boundary) must never surface as a real key message.
-    event.isTrusted === false ||
     event.defaultPrevented ||
     findNearestInteractiveElement(document.activeElement) != null
   );

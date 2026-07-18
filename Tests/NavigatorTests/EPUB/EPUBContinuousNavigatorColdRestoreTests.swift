@@ -51,18 +51,33 @@ struct EPUBContinuousNavigatorColdRestoreTests {
         )
     }
 
-    @Test @MainActor func landingCorrectionStopsOnInputInsideAChapter() async throws {
+    @Test @MainActor func syntheticChapterInputCannotCancelLandingCorrection() async throws {
         let harness = try await Harness(initialLocation: nil)
         defer { harness.tearDown() }
 
         try await harness.startMidChapterJump()
-        let userPosition = try await harness.interruptLandingCorrectionFromChapter()
+        let syntheticInputPosition = try await harness.scrollAfterSyntheticChapterInput()
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let finalPosition = try await harness.currentScrollY()
+
+        #expect(
+            abs(finalPosition - syntheticInputPosition) > 2,
+            "a synthetic chapter event cancelled the landing correction at \(syntheticInputPosition)"
+        )
+    }
+
+    @Test @MainActor func nativeInputStopsLandingCorrection() async throws {
+        let harness = try await Harness(initialLocation: nil)
+        defer { harness.tearDown() }
+
+        try await harness.startMidChapterJump()
+        let userPosition = try await harness.scrollAfterNativeInput()
         try await Task.sleep(nanoseconds: 2_000_000_000)
         let finalPosition = try await harness.currentScrollY()
 
         #expect(
             abs(finalPosition - userPosition) <= 2,
-            "landing correction moved the reader after direct input (\(userPosition) → \(finalPosition))"
+            "landing correction moved the reader after native input (\(userPosition) → \(finalPosition))"
         )
     }
 
@@ -273,12 +288,10 @@ struct EPUBContinuousNavigatorColdRestoreTests {
             }
         }
 
-        func interruptLandingCorrectionFromChapter() async throws -> Double {
-            // Dispatch into the chapter under the viewport center — the one the
-            // reader is looking at. The first iframe in DOM order can be a
-            // freshly remounted neighbor whose contentDocument hasn't loaded,
-            // so its input-cancellation listeners aren't attached yet and the
-            // event would vanish (iframe events never reach the outer window).
+        func scrollAfterSyntheticChapterInput() async throws -> Double {
+            // Dispatch into the chapter under the viewport center. Events never
+            // bubble from an iframe to the outer window, so this reaches the
+            // chapter listener directly.
             let result = try await evaluate(
                 """
                 (function () {
@@ -299,7 +312,23 @@ struct EPUBContinuousNavigatorColdRestoreTests {
                 """
             )
             guard let scrollY = result as? Double else {
-                throw HarnessError("could not interrupt landing correction from the chapter")
+                throw HarnessError("could not dispatch synthetic chapter input")
+            }
+            return scrollY
+        }
+
+        func scrollAfterNativeInput() async throws -> Double {
+            let result = try await evaluate(
+                """
+                (function () {
+                  continuousWrapper.cancelLandingCorrectionFromUserInput();
+                  window.scrollBy(0, 300);
+                  return window.scrollY;
+                })()
+                """
+            )
+            guard let scrollY = result as? Double else {
+                throw HarnessError("could not cancel landing correction from native input")
             }
             return scrollY
         }
@@ -493,15 +522,3 @@ private func paragraphText(_ index: Int) -> String {
 }
 
 private let viewport = CGRect(x: 0, y: 0, width: 390, height: 844)
-
-@MainActor private func findWebView(in view: UIView) -> WKWebView? {
-    var queue: [UIView] = [view]
-    while !queue.isEmpty {
-        let candidate = queue.removeFirst()
-        if let webView = candidate as? WKWebView {
-            return webView
-        }
-        queue.append(contentsOf: candidate.subviews)
-    }
-    return nil
-}

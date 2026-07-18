@@ -73,7 +73,10 @@ enum EPUBScriptScope {
             publicationBaseURL = url
         } else {
             // Serve publication resources.
-            publicationBaseURL = server.serve(at: UUID().uuidString) { [weak self] in
+            publicationBaseURL = server.serve(
+                at: UUID().uuidString,
+                responseHeaders: { [weak self] in self?.contentSecurityPolicyHeaders ?? [:] }
+            ) { [weak self] in
                 await self?.serve(href: $0)
             }
         }
@@ -93,7 +96,8 @@ enum EPUBScriptScope {
         readingOrder: ReadingOrder,
         config: EPUBNavigatorViewController.Configuration,
         sharedServer server: WebViewServer,
-        routePrefix: String
+        routePrefix: String,
+        proxiesRemoteResources: Bool = false
     ) {
         let assetsDirectory = Bundle.module.resourceURL!.fileURL!
             .appendingPath("Assets/Static", isDirectory: true)
@@ -109,11 +113,17 @@ enum EPUBScriptScope {
             formatSniffer: server.formatSniffer
         )
 
-        if let url = publication.baseURL {
+        if let url = publication.baseURL, !proxiesRemoteResources {
             publicationBaseURL = url
         } else {
+            // A remote publication must pass through this route when authored
+            // scripts are blocked. WKWebView cannot attach a CSP to a response
+            // it fetches directly from the remote origin.
             let route = "\(routePrefix)/pub/\(UUID().uuidString)"
-            publicationBaseURL = server.serve(at: route) { [weak self] in
+            publicationBaseURL = server.serve(
+                at: route,
+                responseHeaders: { [weak self] in self?.contentSecurityPolicyHeaders ?? [:] }
+            ) { [weak self] in
                 await self?.serve(href: $0)
             }
             sharedServerPublicationRoute = route
@@ -220,50 +230,30 @@ enum EPUBScriptScope {
 
     // MARK: - Web View Server
 
-    /// Serves chapter HTML with a `script-src 'none'` CSP when true, so
-    /// authored EPUB scripts never run. Set by the continuous navigator
-    /// (default off to leave the stock navigator's behavior untouched);
-    /// injected user scripts are user-agent scripts and exempt from page CSP.
+    /// Blocks authored EPUB scripts when true: every publication response
+    /// carries a `script-src 'none'` CSP header, duplicated as a `<meta>`
+    /// inside HTML documents for defense in depth. Set by the continuous
+    /// navigator (default off to leave the stock navigator's behavior
+    /// untouched); injected user scripts are user-agent scripts and exempt
+    /// from page CSP.
     var blocksAuthoredScripts = false
 
-    private func serve(href: RelativeURL) async -> (Resource, MediaType)? {
-        guard var resource = publication.get(href) else {
-            return nil
-        }
-        let mediaType = await resolveMediaType(for: resource, at: href)
-        resource = injectReadiumCSS(in: resource, at: href)
-        if blocksAuthoredScripts {
-            resource = injectContentSecurityPolicy(in: resource, at: href)
-        }
-        return (resource, mediaType)
+    /// CSP applied at the response level so every content document type is
+    /// policed — scripted SVG and HTML without a `<head>` are documents the
+    /// `<meta>` injection cannot reach. A CSP also does not inherit into
+    /// framed documents fetched over the scheme, so an embedded SVG only
+    /// obeys the policy its own response carries.
+    var contentSecurityPolicyHeaders: [String: String] {
+        blocksAuthoredScripts ? ["Content-Security-Policy": "script-src 'none'"] : [:]
     }
 
-    /// Injects a CSP `<meta>` blocking authored scripts into HTML resources.
-    /// A `<meta http-equiv>` policy only applies to content after it, so it
-    /// goes at the very start of `<head>`, before any authored content.
-    private func injectContentSecurityPolicy<HREF: URLConvertible>(in resource: Resource, at href: HREF) -> Resource {
-        guard
-            let link = publication.linkWithHREF(href),
-            link.mediaType?.isHTML == true
-        else {
-            return resource
+    private func serve(href: RelativeURL) async -> (Resource, MediaType)? {
+        guard let resource = publication.get(href) else {
+            return nil
         }
-
-        return resource.mapAsString { [weak self] content in
-            let injection = HTMLInjection(
-                content: "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\"/>",
-                target: .head,
-                location: .start
-            )
-            let injected = (try? injection.inject(in: content)) ?? content
-            if injected == content {
-                // Without a <head> the policy cannot be applied; surface it —
-                // this document's authored scripts are only contained by the
-                // content-world isolation, not the CSP.
-                self?.log(.warning, "Could not inject the script-blocking CSP (no <head>) in \(href)")
-            }
-            return injected
-        }
+        let link = publication.linkWithHREF(href)
+        let mediaType = await resolveMediaType(for: resource, link: link, at: href)
+        return (transformHTML(resource, link: link, at: href), mediaType)
     }
 
     /// Resolves the media type to use to serve the given `resource`.
@@ -273,8 +263,8 @@ enum EPUBScriptScope {
     ///
     /// The manifest takes precedence because a file with a `.xml` extension
     /// might be declared as `application/xhtml+xml` in the OPF.
-    private func resolveMediaType(for resource: Resource, at href: RelativeURL) async -> MediaType {
-        if let mediaType = publication.linkWithHREF(href)?.mediaType {
+    private func resolveMediaType(for resource: Resource, link: Link?, at href: RelativeURL) async -> MediaType {
+        if let mediaType = link?.mediaType {
             return mediaType
         }
         if let mediaType = await resource.properties().getOrNil()?.mediaType {
@@ -396,41 +386,62 @@ enum EPUBScriptScope {
     private var css: ReadiumCSS
     private var servedFonts: [FileURL: AbsoluteURL] = [:]
 
-    func injectReadiumCSS<HREF: URLConvertible>(in resource: Resource, at href: HREF) -> Resource {
-        guard
-            let link = publication.linkWithHREF(href),
-            link.mediaType?.isHTML == true,
-            publication.metadata.epubLayout == .reflowable
-        else {
+    private func transformHTML(_ resource: Resource, link: Link?, at href: RelativeURL) -> Resource {
+        guard link?.mediaType?.isHTML == true else {
             return resource
         }
 
-        return resource.mapAsString { [weak self] content in
-            guard let self = self else {
+        let injectCSS = publication.metadata.epubLayout == .reflowable
+        let injectCSP = blocksAuthoredScripts
+        guard injectCSS || injectCSP else {
+            return resource
+        }
+
+        return resource.mapAsString { [weak self] original in
+            guard let self else {
+                return original
+            }
+
+            var content = original
+            if injectCSS {
+                do {
+                    content = try css.inject(in: content)
+                    for fontFamily in config.fontFamilyDeclarations {
+                        content = try fontFamily.inject(
+                            in: content,
+                            servingFile: { [server] file in
+                                if let url = self.servedFonts[file] {
+                                    return url
+                                }
+                                let name = file.lastPathSegment ?? UUID().uuidString
+                                let url = server.serve(file: file, at: "assets/fonts/\(name)")
+                                self.servedFonts[file] = url
+                                return url
+                            }
+                        )
+                    }
+                } catch {
+                    log(.error, error)
+                    content = original
+                }
+            }
+
+            guard injectCSP else {
                 return content
             }
 
-            do {
-                var content = try css.inject(in: content)
-                for ff in config.fontFamilyDeclarations {
-                    content = try ff.inject(
-                        in: content,
-                        servingFile: { [server] file in
-                            if let url = self.servedFonts[file] {
-                                return url
-                            }
-                            let name = file.lastPathSegment ?? UUID().uuidString
-                            let url = server.serve(file: file, at: "assets/fonts/\(name)")
-                            self.servedFonts[file] = url
-                            return url
-                        }
-                    )
-                }
-                return content
-            } catch {
-                log(.error, error)
-                return content
+            let injection = HTMLInjection(
+                content: "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\"/>",
+                target: .head,
+                location: .start
+            )
+            let injected = (try? injection.inject(in: content)) ?? content
+            if injected == content {
+                // The response-header CSP still applies; surface the missing
+                // defense-in-depth meta tag in this unusual document shape.
+                self.log(.warning, "Could not inject the script-blocking CSP <meta> (no <head>) in \(href)")
             }
+            return injected
         }
     }
 

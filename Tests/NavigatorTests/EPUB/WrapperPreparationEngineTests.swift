@@ -90,6 +90,21 @@ class WrapperPreparationEngineTests: XCTestCase {
 
     // MARK: - Warm-up state transitions
 
+    func testWrapperScriptsPreserveSeedBundleShimOrder() {
+        let engine = WrapperPreparationEngine(observeAppLifecycle: false)
+        let sources = engine.makeWrapperWebView()
+            .configuration.userContentController.userScripts
+            .map(\.source)
+
+        let seed = "window.readium = window.readium || { isFixedLayout: true };"
+        guard let seedIndex = sources.firstIndex(of: seed) else {
+            return XCTFail("The wrapper seed script must be registered")
+        }
+        XCTAssertGreaterThan(sources.count, seedIndex + 2)
+        XCTAssertTrue(sources[seedIndex + 1].contains("continuousWrapper"))
+        XCTAssertTrue(sources[seedIndex + 2].contains("Override APIs to avoid iframe.contentWindow.eval"))
+    }
+
     func testWarmUpSetsWarmingState() {
         let (engine, _) = makeEngine()
         XCTAssertTrue(engine.warmUp())

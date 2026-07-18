@@ -338,7 +338,8 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             readingOrder: publication.readingOrder,
             config: epubConfig,
             sharedServer: WrapperPreparationEngine.shared.server,
-            routePrefix: WrapperPreparationEngine.routePrefix
+            routePrefix: WrapperPreparationEngine.routePrefix,
+            proxiesRemoteResources: !config.allowsAuthoredScripts
         )
         viewModel.blocksAuthoredScripts = !config.allowsAuthoredScripts
 
@@ -658,7 +659,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             log(.trace, "Evaluate script: \(script)")
         }
         return await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script, in: nil, in: WrapperPreparationEngine.contentWorld) { result in
+            webView.evaluateInBridgeWorld(script) { result in
                 switch result {
                 case let .success(value):
                     continuation.resume(returning: .success(value))
@@ -683,7 +684,7 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             log(.trace, "Evaluate async script: \(functionBody)")
         }
         return await withCheckedContinuation { continuation in
-            webView.callAsyncJavaScript(functionBody, in: nil, in: WrapperPreparationEngine.contentWorld) { result in
+            webView.callAsyncInBridgeWorld(functionBody) { result in
                 switch result {
                 case let .success(value):
                     continuation.resume(returning: .success(value))
@@ -1362,7 +1363,7 @@ extension EPUBContinuousNavigatorViewController: WKNavigationDelegate {
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         log(.debug, "Wrapper navigation finished")
 
-        webView.evaluateJavaScript(
+        webView.evaluateInBridgeWorld(
             """
             (function () {
               var scripts = Array.prototype.slice.call(document.scripts || []).map(function (s) { return s.src || ''; }).filter(Boolean);
@@ -1378,9 +1379,7 @@ extension EPUBContinuousNavigatorViewController: WKNavigationDelegate {
                 chaptersChildren: chapters ? chapters.children.length : -1
               };
             })();
-            """,
-            in: nil,
-            in: WrapperPreparationEngine.contentWorld
+            """
         ) { [weak self] result in
             guard let self else { return }
             let value: Any

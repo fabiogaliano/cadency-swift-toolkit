@@ -59,7 +59,10 @@ import WebKit
     private enum RouteHandler {
         case file(FileURL)
         case directory(FileURL)
-        case resources(@MainActor (RelativeURL) async -> (Resource, MediaType)?)
+        case resources(
+            @MainActor (RelativeURL) async -> (Resource, MediaType)?,
+            responseHeaders: @MainActor () -> [String: String]
+        )
     }
 
     /// Registered routes, sorted by reverse alphabetical order to ensure
@@ -98,12 +101,20 @@ import WebKit
     /// `nil` for 404. Returned resources are automatically wrapped in a
     /// `BufferingResource` cache.
     ///
+    /// `responseHeaders` is evaluated on every request (not at registration,
+    /// so policies toggled after the route is up still apply) and merged into
+    /// each response — e.g. a route-wide `Content-Security-Policy`.
+    ///
     /// Returns the base URL (e.g. `readium://{uuid}/`).
     @discardableResult
-    func serve(at route: String, handler: @escaping @MainActor (RelativeURL) async -> (Resource, MediaType)?) -> AbsoluteURL {
+    func serve(
+        at route: String,
+        responseHeaders: @escaping @MainActor () -> [String: String] = { [:] },
+        handler: @escaping @MainActor (RelativeURL) async -> (Resource, MediaType)?
+    ) -> AbsoluteURL {
         let route = normalizedRoute(route, isDirectory: true)
         let baseURL = AnyURL(string: "\(scheme)://\(route)")!.absoluteURL!
-        insertRoute((path: route, baseURL: baseURL, handler: .resources(handler)))
+        insertRoute((path: route, baseURL: baseURL, handler: .resources(handler, responseHeaders: responseHeaders)))
         return baseURL
     }
 
@@ -216,7 +227,7 @@ import WebKit
                 await serveFile(urlSchemeTask, at: file, requestURL: requestURL, allowCrossOrigin: true, receivedAt: receivedAt)
                 return
 
-            case let .resources(handler):
+            case let .resources(handler, responseHeaders):
                 guard let relativeURL = route.baseURL.relativize(requestURL) else {
                     continue
                 }
@@ -225,6 +236,7 @@ import WebKit
                     routePath: route.path,
                     relativeURL: relativeURL,
                     handler: handler,
+                    additionalHeaders: responseHeaders(),
                     requestURL: requestURL,
                     receivedAt: receivedAt
                 )
@@ -244,6 +256,7 @@ import WebKit
         routePath: String,
         relativeURL: RelativeURL,
         handler: @MainActor (RelativeURL) async -> (Resource, MediaType)?,
+        additionalHeaders: [String: String],
         requestURL: URL,
         receivedAt: Date
     ) async {
@@ -279,6 +292,7 @@ import WebKit
             resource,
             with: urlSchemeTask,
             mediaType: mediaType,
+            additionalHeaders: additionalHeaders,
             requestURL: requestURL,
             receivedAt: receivedAt,
             cacheState: cacheState,
@@ -359,6 +373,7 @@ import WebKit
         _ resource: Resource,
         with urlSchemeTask: WKURLSchemeTask,
         mediaType: MediaType?,
+        additionalHeaders: [String: String] = [:],
         requestURL: URL,
         allowCrossOrigin: Bool = false,
         receivedAt: Date,
@@ -377,7 +392,7 @@ import WebKit
                 #if DEBUG
                     emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: data.count, outcome: "206")
                 #endif
-                await respond(urlSchemeTask, with: data, range: range, totalLength: totalLength, mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
+                await respond(urlSchemeTask, with: data, range: range, totalLength: totalLength, mediaType: mediaType, additionalHeaders: additionalHeaders, url: requestURL, allowCrossOrigin: allowCrossOrigin)
             case let .failure(error):
                 log(.error, "Failed to read resource \(requestURL.path) range \(range): \(error)")
                 await fail(urlSchemeTask, with: URLError(.resourceUnavailable))
@@ -395,7 +410,7 @@ import WebKit
             #if DEBUG
                 emitServeTrace(url: requestURL, receivedAt: receivedAt, cache: cacheState, bytes: data.count, outcome: "200")
             #endif
-            await respond(urlSchemeTask, with: data, range: nil, totalLength: UInt64(data.count), mediaType: mediaType, url: requestURL, allowCrossOrigin: allowCrossOrigin)
+            await respond(urlSchemeTask, with: data, range: nil, totalLength: UInt64(data.count), mediaType: mediaType, additionalHeaders: additionalHeaders, url: requestURL, allowCrossOrigin: allowCrossOrigin)
         case let .failure(error):
             log(.error, "Failed to read resource \(requestURL.path): \(error)")
             await fail(urlSchemeTask, with: URLError(.resourceUnavailable))
@@ -425,6 +440,7 @@ import WebKit
         range: Range<UInt64>?,
         totalLength: UInt64,
         mediaType: MediaType?,
+        additionalHeaders: [String: String] = [:],
         url: URL,
         allowCrossOrigin: Bool
     ) async {
@@ -432,6 +448,8 @@ import WebKit
             "Content-Length": "\(data.count)",
             "Accept-Ranges": "bytes",
         ]
+
+        headers.merge(additionalHeaders) { _, additional in additional }
 
         if allowCrossOrigin {
             // Static assets (e.g. fonts declared with

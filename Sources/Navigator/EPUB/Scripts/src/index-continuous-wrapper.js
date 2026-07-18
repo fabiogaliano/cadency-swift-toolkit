@@ -11,6 +11,7 @@ import { log } from "./utils";
 import { createPendingNavigation } from "./pending-navigation";
 import { createLandingCorrection } from "./landing-correction";
 import { findSpineIndexByHref, offsetInChapter } from "./navigation-target";
+import { addUserEventListener, isUserEvent } from "./user-event";
 import {
   chapterAtViewportTop,
   chapterProgression,
@@ -734,7 +735,9 @@ function beginUserScroll(now = Date.now()) {
   }, 150);
 }
 
-function cancelLandingCorrectionFromUserInput() {
+function cancelLandingCorrectionFromUserInput(event) {
+  if (event && !isUserEvent(event)) return;
+
   const hasLandingScrollPending = Date.now() < landingCorrectionScrollUntil;
   if (!landingCorrection.cancelFromUserInput() && !hasLandingScrollPending) {
     return;
@@ -754,7 +757,8 @@ function setupIframeUserInputCancellation(iframe) {
     "wheel",
     "keydown",
   ]) {
-    doc.addEventListener(
+    addUserEventListener(
+      doc,
       eventName,
       cancelLandingCorrectionFromUserInput,
       options
@@ -776,33 +780,45 @@ function setupScrollListener() {
     }
   }
 
-  window.addEventListener("pointerdown", cancelLandingCorrectionFromUserInput, {
-    passive: true,
-  });
-  window.addEventListener(
+  addUserEventListener(
+    window,
+    "pointerdown",
+    cancelLandingCorrectionFromUserInput,
+    {
+      passive: true,
+    }
+  );
+  addUserEventListener(
+    window,
     "touchstart",
     (e) => {
-      cancelLandingCorrectionFromUserInput();
+      cancelLandingCorrectionFromUserInput(e);
       const t = e.touches && e.touches[0];
       maybeSuppressAnchoringFromClientX(t?.clientX);
     },
     { passive: true }
   );
 
-  window.addEventListener(
+  addUserEventListener(
+    window,
     "mousedown",
     (e) => {
-      cancelLandingCorrectionFromUserInput();
+      cancelLandingCorrectionFromUserInput(e);
       maybeSuppressAnchoringFromClientX(e.clientX);
     },
     { passive: true }
   );
-  window.addEventListener("wheel", cancelLandingCorrectionFromUserInput, {
+  addUserEventListener(window, "wheel", cancelLandingCorrectionFromUserInput, {
     passive: true,
   });
-  window.addEventListener("keydown", cancelLandingCorrectionFromUserInput, {
-    passive: true,
-  });
+  addUserEventListener(
+    window,
+    "keydown",
+    cancelLandingCorrectionFromUserInput,
+    {
+      passive: true,
+    }
+  );
 
   window.addEventListener("scroll", () => {
     if (!ticking) {

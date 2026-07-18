@@ -487,10 +487,8 @@ extension WrapperPreparationEngine: WKNavigationDelegate {
     public func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
         guard webView === warmedWebView else { return }
 
-        webView.evaluateJavaScript(
-            "typeof continuousWrapper !== 'undefined'",
-            in: nil,
-            in: Self.contentWorld
+        webView.evaluateInBridgeWorld(
+            "typeof continuousWrapper !== 'undefined'"
         ) { [weak self] result in
             guard let self, webView === self.warmedWebView else { return }
             if case let .success(value) = result, (value as? Bool) == true {
