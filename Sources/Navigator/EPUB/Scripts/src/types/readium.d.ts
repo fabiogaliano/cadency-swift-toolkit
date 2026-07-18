@@ -2,16 +2,21 @@
 // untyped seam (native bridge, the `readium` chapter-API global, decoration
 // groups, ...). Kept deliberately narrow per Plan 006 Step 2:
 //
-// - No typed Cadency module calls the `readium` chapter-API object yet
-//   (visible-locator.ts is pure geometry and never touches it), so its
-//   methods (`scrollToId`, `activateBlockAtLocalPoint`,
-//   `registerDecorationTemplates`, `getDecorations`, ...) are intentionally
-//   NOT declared here. Several return opaque, non-JSON runtime objects (e.g.
-//   `getDecorations` returns an internal `DecorationGroup` instance built in
-//   src/decorator.js) that would have to be guessed at rather than proven
-//   against a real typed call site - exactly what this step forbids.
-//   Steps 3-4 (out of scope for this pass) add the chapter-API and
-//   continuous-wrapper declarations once a typed module actually calls them.
+// - Most of the `readium` chapter-API object's methods
+//   (`scrollToId`, `activateBlockAtLocalPoint`, `registerDecorationTemplates`,
+//   `getDecorations`, ...) are still intentionally NOT declared here. Several
+//   return opaque, non-JSON runtime objects (e.g. `getDecorations` returns an
+//   internal `DecorationGroup` instance built in src/decorator.js) that would
+//   have to be guessed at rather than proven against a real typed call site -
+//   exactly what this step forbids. `link` is the one exception (Plan 006
+//   Step 4): `blocks.ts`'s `buildBlockLocator` reads `readium.link.href` (the
+//   publication-relative chapter href, assigned once per chapter mount by
+//   `index-continuous-wrapper.js`'s `readium.link = item.link || { href:
+//   item.href }` and by the fixed-layout wrapper's injected `readium.link =
+//   JSON.stringify(resource.link)`). Both assignments always include at least
+//   `href`, so that's all that's declared - the rest of any richer `Link`
+//   object is left unmodeled since nothing typed reads it. The remaining
+//   surface is deferred until a typed caller actually needs it.
 // - `JSONValue` and `LocatorJSON` below ARE grounded in real source: the
 //   recursive JSON shape is the only one safe to pass across
 //   `postMessage`/global-object boundaries, and `LocatorJSON`'s fields match
@@ -40,3 +45,14 @@ interface LocatorJSON {
   locations?: { [key: string]: JSONValue };
   text?: { [key: string]: JSONValue };
 }
+
+// The `readium` chapter-API global (`global.readium = {...}` in index.js,
+// with `.link` assigned separately per chapter mount). `link` is optional
+// because a chapter's own script can run before its mount code has set it.
+interface ReadiumChapterLink {
+  href: string;
+}
+
+declare const readium: {
+  link?: ReadiumChapterLink;
+};

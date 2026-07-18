@@ -11,7 +11,7 @@ import {
   resolveSemanticBlockAtPoint,
   resolveSemanticBlockForTarget,
   buildBlockActivationPayload,
-} from "./blocks";
+} from "./cadency/interaction/blocks";
 import { createTapArbiter } from "./cadency/interaction/tap-arbitration";
 import { logError } from "./utils";
 import { addUserEventListener } from "./user-event";

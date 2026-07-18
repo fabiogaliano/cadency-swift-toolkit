@@ -8,16 +8,21 @@
 // highlighting. This module only resolves blocks and builds the payload a
 // future gesture handler would send natively - it does not listen for
 // gestures or touch the WK message bridge itself.
+//
+// Imports from `dom.js`/`utils.js`/`selection.js` are typed only at this
+// narrow seam (see the sibling `src/dom.d.ts`, `src/utils.d.ts`,
+// `src/selection.d.ts`) - those upstream-heavy files stay untyped JS, out of
+// this plan's scope.
 
-import { findNearestInteractiveAncestor } from "./dom";
-import { logError, logErrorMessage } from "./utils";
+import { findNearestInteractiveAncestor } from "../../dom";
+import { logError, logErrorMessage } from "../../utils";
 import {
   cssSelectorForElement,
   contextAroundRange,
   normalizeHighlightText,
   rangeForElement,
   rangeLocalRect,
-} from "./selection";
+} from "../../selection";
 
 // Elements treated as a complete, independently-activatable reading block.
 const PRIMARY_BLOCK_TAGS = new Set([
@@ -69,6 +74,34 @@ const FALLBACK_BLOCK_DISPLAY = new Set([
 // Short, since a block's own text already provides the bulk of the context.
 const BLOCK_CONTEXT_LENGTH = 50;
 
+// The Locator this module actually produces: a concrete refinement of the
+// shared, JSON-safe `LocatorJSON` (declared in `src/types/readium.d.ts`,
+// grounded in what `dom.js`'s `findFirstVisibleLocator` builds), narrowed to
+// the fields block activation always sets - so callers read
+// `locations.cssSelector`/`text.highlight` directly instead of narrowing a
+// generic `JSONValue` record at every use.
+export interface BlockLocator extends LocatorJSON {
+  locations: { cssSelector: string };
+  text: { highlight: string; before: string; after: string };
+}
+
+// The activation rect in the chapter iframe's own local viewport
+// coordinates - finite plain numbers, not a DOM rect type, since the actual
+// `DOMRect` never crosses this module's boundary (`rangeLocalRect` already
+// destructures one into this shape).
+export interface FiniteRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BlockActivationPayload {
+  locator: BlockLocator;
+  iframeLocalRect: FiniteRect;
+  blockKey: string;
+}
+
 /**
  * Resolves the semantic block a pointer/tap event target belongs to.
  *
@@ -76,7 +109,9 @@ const BLOCK_CONTEXT_LENGTH = 50;
  * sits inside interactive content, or no reasonable block can be found
  * (never activates the whole chapter).
  */
-export function resolveSemanticBlockForTarget(target) {
+export function resolveSemanticBlockForTarget(
+  target: Node | null
+): Element | null {
   try {
     const element = elementFromEventTarget(target);
     if (!element) {
@@ -106,7 +141,10 @@ export function resolveSemanticBlockForTarget(target) {
  * only have a viewport point (e.g. a confirmed double-tap position) rather
  * than a DOM event target.
  */
-export function resolveSemanticBlockAtPoint(x, y) {
+export function resolveSemanticBlockAtPoint(
+  x: number,
+  y: number
+): Element | null {
   return resolveSemanticBlockForTarget(document.elementFromPoint(x, y));
 }
 
@@ -118,7 +156,9 @@ export function resolveSemanticBlockAtPoint(x, y) {
  * Returns null rather than a best-effort/partial Locator - block activation
  * should fail silently over highlighting the wrong text.
  */
-export function buildBlockLocator(blockElement) {
+export function buildBlockLocator(
+  blockElement: Element | null
+): BlockLocator | null {
   try {
     if (!blockElement) {
       return null;
@@ -173,8 +213,18 @@ export function buildBlockLocator(blockElement) {
  *
  * Returns null if a valid Locator or a sane rect can't be produced.
  */
-export function buildBlockActivationPayload(blockElement) {
+export function buildBlockActivationPayload(
+  blockElement: Element | null
+): BlockActivationPayload | null {
   try {
+    // Narrows `blockElement` here too (not just inside `buildBlockLocator`)
+    // so `rangeForElement` below can take it as a non-null `Element` - a
+    // null `blockElement` already makes `buildBlockLocator` return null and
+    // exit below either way, so this changes no observable outcome.
+    if (!blockElement) {
+      return null;
+    }
+
     const locator = buildBlockLocator(blockElement);
     if (!locator) {
       return null;
@@ -201,7 +251,7 @@ export function buildBlockActivationPayload(blockElement) {
   }
 }
 
-function isSaneRect(rect) {
+function isSaneRect(rect: FiniteRect): boolean {
   return (
     Number.isFinite(rect.x) &&
     Number.isFinite(rect.y) &&
@@ -212,17 +262,24 @@ function isSaneRect(rect) {
   );
 }
 
-function elementFromEventTarget(target) {
+function elementFromEventTarget(target: Node | null): Element | null {
   if (!target) {
     return null;
   }
   if (target.nodeType === Node.TEXT_NODE) {
     return target.parentElement;
   }
-  if (target.nodeType === Node.ELEMENT_NODE) {
+  if (isElementNode(target)) {
     return target;
   }
   return null;
+}
+
+// A type guard rather than a cast: `nodeType === Node.ELEMENT_NODE` is the
+// DOM spec's own definition of "this Node implements Element", so this
+// narrows soundly instead of asserting something the compiler can't verify.
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === Node.ELEMENT_NODE;
 }
 
 // Walks up from `element` and returns the nearest ancestor-or-self primary
@@ -230,9 +287,16 @@ function elementFromEventTarget(target) {
 // target and walking outward is what makes a nested primary block (e.g. the
 // <p> in an <li> > <p>) win over its containing primary parent - it's simply
 // found first.
-function findNearestPrimaryBlock(element) {
-  let node = element;
-  while (node && node.nodeType === Node.ELEMENT_NODE) {
+//
+// The original loop condition also checked `node.nodeType ===
+// Node.ELEMENT_NODE` on every iteration; dropped here as a provably dead
+// check, not a behavior change - `node` starts as the `Element` parameter
+// and is only ever reassigned from `.parentElement`, which the DOM spec (and
+// the DOM lib's own type) guarantees is always `Element | null`, never any
+// other node kind. The loop can never see a non-Element truthy `node`.
+function findNearestPrimaryBlock(element: Element): Element | null {
+  let node: Element | null = element;
+  while (node) {
     if (
       PRIMARY_BLOCK_TAGS.has(node.nodeName.toLowerCase()) &&
       isEligibleBlock(node)
@@ -244,7 +308,7 @@ function findNearestPrimaryBlock(element) {
   return null;
 }
 
-function isEligibleBlock(element) {
+function isEligibleBlock(element: Element): boolean {
   return (
     !isHiddenOrInert(element) &&
     normalizeHighlightText(element.textContent).length > 0
@@ -253,9 +317,12 @@ function isEligibleBlock(element) {
 
 // Conservative fallback for malformed or div-based EPUBs with no semantic
 // primary blocks. Prefers no activation over highlighting an entire chapter.
-function findNearestLeafBlockFallback(element) {
-  let node = element;
-  while (node && node.nodeType === Node.ELEMENT_NODE) {
+//
+// Same provably-dead `nodeType === Node.ELEMENT_NODE` drop as
+// `findNearestPrimaryBlock` above.
+function findNearestLeafBlockFallback(element: Element): Element | null {
+  let node: Element | null = element;
+  while (node) {
     if (isConservativeLeafBlockCandidate(node)) {
       return node;
     }
@@ -264,7 +331,7 @@ function findNearestLeafBlockFallback(element) {
   return null;
 }
 
-function isConservativeLeafBlockCandidate(element) {
+function isConservativeLeafBlockCandidate(element: Element): boolean {
   const tag = element.nodeName.toLowerCase();
   if (FALLBACK_REJECTED_TAGS.has(tag)) {
     return false;
@@ -295,7 +362,7 @@ function isConservativeLeafBlockCandidate(element) {
   return true;
 }
 
-function hasMultipleMeaningfulBlockDescendants(element) {
+function hasMultipleMeaningfulBlockDescendants(element: Element): boolean {
   let meaningfulCount = 0;
   for (const descendant of element.querySelectorAll("*")) {
     const style = getComputedStyle(descendant);
@@ -313,9 +380,12 @@ function hasMultipleMeaningfulBlockDescendants(element) {
   return false;
 }
 
-function isHiddenOrInert(element) {
-  let node = element;
-  while (node && node.nodeType === Node.ELEMENT_NODE) {
+// Same provably-dead `nodeType === Node.ELEMENT_NODE` drop as
+// `findNearestPrimaryBlock` above - `node` is only ever the `Element`
+// parameter or a `.parentElement` reassignment.
+function isHiddenOrInert(element: Element): boolean {
+  let node: Element | null = element;
+  while (node) {
     if (node.hasAttribute("inert") || node.hasAttribute("hidden")) {
       return true;
     }
@@ -341,7 +411,11 @@ function isHiddenOrInert(element) {
 // selector in different chapters produces different keys, and a short text
 // fingerprint is appended in case a malformed document produces two elements
 // that resolve to indistinguishable selectors.
-function buildBlockKey(href, cssSelector, exactText) {
+function buildBlockKey(
+  href: string,
+  cssSelector: string,
+  exactText: string
+): string {
   return `${normalizeHref(href)}#${cssSelector}::${shortTextFingerprint(
     exactText
   )}`;
@@ -353,13 +427,13 @@ function buildBlockKey(href, cssSelector, exactText) {
 // document URL via `new URL()`, since that risks doubling path segments
 // when the href and the iframe's base URL share a directory prefix. Just
 // strip whitespace and any incidental query/hash.
-function normalizeHref(href) {
+function normalizeHref(href: string): string {
   return href.trim().split(/[?#]/)[0];
 }
 
 // Deterministic (FNV-1a), short, and stable across calls for the same text -
 // not a random or session-scoped value.
-function shortTextFingerprint(text) {
+function shortTextFingerprint(text: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     hash ^= text.charCodeAt(i);
