@@ -5,19 +5,25 @@ import {
   DOUBLE_TAP_DISTANCE_THRESHOLD_PX,
   TAP_MOVEMENT_THRESHOLD_PX,
   WRAPPER_SCROLL_SETTLE_MS,
-} from "../src/tap-arbitration";
+  type TapArbiterClickEvent,
+} from "../../../src/cadency/interaction/tap-arbitration";
 
 // Semantic blocks are opaque identity tokens to the arbiter.
 const BLOCK_A = { name: "block-a" };
 const BLOCK_B = { name: "block-b" };
+
+interface TestClickEvent extends TapArbiterClickEvent {
+  x: number;
+  y: number;
+}
 
 // Deterministic clock + timer queue so every arbitration race can be driven
 // through the same interface the DOM adapter uses.
 function createHarness() {
   let nowMs = 0;
   let nextTimerId = 1;
-  const timers = new Map();
-  const sentTaps = [];
+  const timers = new Map<number, { fireAt: number; fn: () => void }>();
+  const sentTaps: TapArbiterClickEvent[] = [];
   const selection = { collapsed: true };
 
   const arbiter = createTapArbiter({
@@ -29,21 +35,25 @@ function createHarness() {
       timers.set(id, { fireAt: nowMs + ms, fn });
       return id;
     },
-    clearTimer: (id) => timers.delete(id),
+    clearTimer: (id) => {
+      if (id != null) {
+        timers.delete(id);
+      }
+    },
   });
 
-  function advance(ms) {
+  function advance(ms: number) {
     const target = nowMs + ms;
     for (;;) {
-      let dueId = null;
-      let due = null;
+      let dueId: number | null = null;
+      let due: { fireAt: number; fn: () => void } | null = null;
       for (const [id, timer] of timers) {
         if (timer.fireAt <= target && (!due || timer.fireAt < due.fireAt)) {
           dueId = id;
           due = timer;
         }
       }
-      if (!due) break;
+      if (!due || dueId == null) break;
       timers.delete(dueId);
       nowMs = due.fireAt;
       due.fn();
@@ -54,10 +64,12 @@ function createHarness() {
   return { arbiter, advance, sentTaps, selection, timers };
 }
 
+type Harness = ReturnType<typeof createHarness>;
+
 // A complete down/up gesture followed by its click, the way the DOM adapter
 // delivers them.
 function performTap(
-  harness,
+  harness: Harness,
   {
     block = BLOCK_A,
     x = 100,
@@ -66,11 +78,19 @@ function performTap(
     isPrimary = true,
     pointerId = 1,
     interactiveElement = null,
+  }: {
+    block?: unknown;
+    x?: number;
+    y?: number;
+    pointerType?: string;
+    isPrimary?: boolean;
+    pointerId?: number;
+    interactiveElement?: unknown;
   } = {}
 ) {
   harness.arbiter.pointerDown({ pointerId, pointerType, isPrimary, x, y });
   harness.arbiter.pointerUp({ pointerId, x, y });
-  const clickEvent = { x, y, interactiveElement };
+  const clickEvent: TestClickEvent = { x, y, interactiveElement };
   const outcome = harness.arbiter.tap({
     clickEvent,
     resolveBlock: () => block,
@@ -192,8 +212,13 @@ describe("qualification", () => {
       y: 100,
     });
     h.arbiter.pointerUp({ pointerId: 1, x: 120, y: 100 });
+    const clickEvent: TestClickEvent = {
+      x: 120,
+      y: 100,
+      interactiveElement: null,
+    };
     const outcome = h.arbiter.tap({
-      clickEvent: { x: 120, y: 100, interactiveElement: null },
+      clickEvent,
       resolveBlock: () => BLOCK_A,
     });
     expect(outcome).toBe("forwarded");
@@ -259,7 +284,14 @@ describe("scroll cancellation", () => {
 describe("accidental selection pairing", () => {
   // WebKit can select a word as a side effect of the second tap's raw touch,
   // before its click reaches arbitration. The pair must still be recognized.
-  function tapWithSelection(h, { block = BLOCK_A, x = 105, y = 100 } = {}) {
+  function tapWithSelection(
+    h: Harness,
+    {
+      block = BLOCK_A,
+      x = 105,
+      y = 100,
+    }: { block?: unknown; x?: number; y?: number } = {}
+  ) {
     h.arbiter.pointerDown({
       pointerId: 2,
       pointerType: "touch",
@@ -268,8 +300,9 @@ describe("accidental selection pairing", () => {
       y,
     });
     h.arbiter.pointerUp({ pointerId: 2, x, y });
+    const clickEvent: TestClickEvent = { x, y, interactiveElement: null };
     return h.arbiter.tapDuringSelection({
-      clickEvent: { x, y, interactiveElement: null },
+      clickEvent,
       resolveBlock: () => block,
     });
   }

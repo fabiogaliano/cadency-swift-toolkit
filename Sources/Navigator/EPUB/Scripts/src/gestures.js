@@ -12,7 +12,7 @@ import {
   resolveSemanticBlockForTarget,
   buildBlockActivationPayload,
 } from "./blocks";
-import { createTapArbiter } from "./tap-arbitration";
+import { createTapArbiter } from "./cadency/interaction/tap-arbitration";
 import { logError } from "./utils";
 import { addUserEventListener } from "./user-event";
 import { getCssSelector } from "css-selector-generator";

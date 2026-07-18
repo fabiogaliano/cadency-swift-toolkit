@@ -27,39 +27,167 @@ export const DOUBLE_TAP_DISTANCE_THRESHOLD_PX = 40;
 // cadence as the wrapper's own idea of "user scrolling".
 export const WRAPPER_SCROLL_SETTLE_MS = 150;
 
+// Derived from the DOM runtime's own `setTimeout`, not a guessed/cast literal
+// (`number`) or the Node `NodeJS.Timeout` shape - whatever this program's
+// `lib` config says `setTimeout` returns is what a timer id actually is here.
+// This lets the default scheduler below assign straight into it with zero
+// cast, while still matching a test double's own numeric ids structurally.
+type TimerId = ReturnType<typeof setTimeout>;
+
+// Click events are opaque to the arbiter beyond the one field it reads for
+// qualification; callers (the real DOM adapter, or a test harness) can carry
+// arbitrary extra fields through `sendTap` unexamined.
+export interface TapArbiterClickEvent {
+  interactiveElement: unknown;
+}
+
+// Returned by `tap()`:
+//  - "forwarded": non-qualifying tap, already sent to native (in order,
+//    after any flushed pending tap). Callers leave the click's default alone.
+//  - "queued": a qualifying first tap now waiting out the double-tap window.
+//  - "swallowed-pair": the second tap of a double-tap; the pair is consumed
+//    and native owns the activation.
+export type TapOutcome = "forwarded" | "queued" | "swallowed-pair";
+
+// Returned by `tapDuringSelection()`:
+//  - "paired": this click is the second tap of a double-tap (the pair is
+//    consumed).
+//  - "unclaimed": wrong block, too far, wrong pointer, or nothing pending.
+export type TapDuringSelectionOutcome = "paired" | "unclaimed";
+
+interface PointerDownInput {
+  pointerId: number;
+  pointerType: string;
+  isPrimary: boolean;
+  x: number;
+  y: number;
+}
+
+interface PointerMovedInput {
+  pointerId: number;
+  x: number;
+  y: number;
+}
+
+interface PointerUpInput {
+  pointerId: number;
+  x: number;
+  y: number;
+}
+
+interface PointerCancelledInput {
+  pointerId: number;
+}
+
+interface ActivePointer {
+  pointerId: number;
+  pointerType: string;
+  isPrimary: boolean;
+  startX: number;
+  startY: number;
+  moved: boolean;
+}
+
+interface CompletedTap {
+  pointerType: string;
+  isPrimary: boolean;
+  x: number;
+  y: number;
+}
+
+// The fields arbitration actually compares between a pending tap and a
+// candidate second tap - deliberately excludes `clickEvent`/`timer`, which
+// only the stored pending tap carries.
+interface TapIdentity {
+  block: unknown;
+  pointerType: string;
+  isPrimary: boolean;
+  x: number;
+  y: number;
+}
+
+// A pending tap without a timer would mean "waiting out a delay that was
+// never scheduled" - unconstructible here; `timer` is set atomically with
+// the rest of the identity when a tap is queued (see `tap()`).
+interface PendingSingleTap extends TapIdentity {
+  clickEvent: TapArbiterClickEvent;
+  timer: TimerId;
+}
+
+interface TapInput {
+  clickEvent: TapArbiterClickEvent;
+  resolveBlock: () => unknown;
+}
+
+export interface TapArbiterDeps {
+  sendTap: (clickEvent: TapArbiterClickEvent) => void;
+  isSelectionCollapsed: () => boolean;
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => TimerId;
+  clearTimer?: (id: TimerId | null) => void;
+}
+
+export interface TapArbiter {
+  pointerDown(input: PointerDownInput): void;
+  pointerMoved(input: PointerMovedInput): void;
+  pointerUp(input: PointerUpInput): void;
+  pointerCancelled(input: PointerCancelledInput): void;
+  outerScrolled(): void;
+  shouldSuppressClick(): boolean;
+  hasPendingTap(): boolean;
+  nativeActivationRequested(): void;
+  tap(input: TapInput): TapOutcome;
+  tapDuringSelection(input: TapInput): TapDuringSelectionOutcome;
+  flushPendingTap(): void;
+  dispose(): void;
+}
+
 export function createTapArbiter({
   sendTap,
   isSelectionCollapsed,
   now = () => Date.now(),
-  setTimer = (fn, ms) => setTimeout(fn, ms),
-  clearTimer = (id) => clearTimeout(id),
-}) {
+  setTimer = (fn: () => void, ms: number) => setTimeout(fn, ms),
+  clearTimer = (id: TimerId | null) => {
+    // Mirrors `clearTimeout(null)` being a harmless no-op at runtime, since
+    // `wrapperScrollEndTimer`/a fresh pending tap's timer legitimately start
+    // out unset - `clearTimeout` itself only accepts `number | undefined`.
+    if (id != null) {
+      clearTimeout(id);
+    }
+  },
+}: TapArbiterDeps): TapArbiter {
   // The pointer currently down, tracked only to compute per-tap movement and
   // pointer type/primary-ness for arbitration - never used to gate the
   // pre-existing, unconditional pointer-event forwarding in `gestures.js`.
-  let activePointer = null;
+  let activePointer: ActivePointer | null = null;
 
   // The most recently completed low-movement pointer gesture (a candidate
   // "tap"), consumed by the very next `click`. Cleared to null whenever the
   // completing pointer moved past the tap threshold, so a click following a
   // drag never qualifies for arbitration.
-  let lastCompletedTap = null;
+  let lastCompletedTap: CompletedTap | null = null;
 
   // A single-tap event delayed to see whether it pairs with a second tap on
   // the same semantic block - so the first tap of a double-tap never fires as
   // a plain tap (the native recognizer owns the resulting activation). Never
   // more than one at a time: a non-pairing second tap immediately resolves
   // this one as a plain tap first.
-  let pendingSingleTap = null;
+  let pendingSingleTap: PendingSingleTap | null = null;
 
   let isWrapperScrolling = false;
-  let wrapperScrollEndTimer = null;
+  let wrapperScrollEndTimer: TimerId | null = null;
   let suppressClicksUntil = 0;
 
   // Only the primary pointer is tracked for arbitration, so an incidental
   // secondary touch (e.g. a stray second finger) can never clobber tracking
   // of an in-flight primary-pointer tap.
-  function pointerDown({ pointerId, pointerType, isPrimary, x, y }) {
+  function pointerDown({
+    pointerId,
+    pointerType,
+    isPrimary,
+    x,
+    y,
+  }: PointerDownInput): void {
     if (!isPrimary) {
       return;
     }
@@ -73,7 +201,7 @@ export function createTapArbiter({
     };
   }
 
-  function pointerMoved({ pointerId, x, y }) {
+  function pointerMoved({ pointerId, x, y }: PointerMovedInput): void {
     if (
       !activePointer ||
       pointerId !== activePointer.pointerId ||
@@ -93,7 +221,7 @@ export function createTapArbiter({
     }
   }
 
-  function pointerUp({ pointerId, x, y }) {
+  function pointerUp({ pointerId, x, y }: PointerUpInput): void {
     if (activePointer && pointerId === activePointer.pointerId) {
       lastCompletedTap = activePointer.moved
         ? null
@@ -109,7 +237,7 @@ export function createTapArbiter({
     }
   }
 
-  function pointerCancelled({ pointerId }) {
+  function pointerCancelled({ pointerId }: PointerCancelledInput): void {
     if (activePointer && pointerId === activePointer.pointerId) {
       activePointer = null;
     }
@@ -117,7 +245,7 @@ export function createTapArbiter({
     discardPendingTap();
   }
 
-  function outerScrolled() {
+  function outerScrolled(): void {
     isWrapperScrolling = true;
     // A delayed single tap must never fire because of a scroll that started
     // after the tap was recorded.
@@ -128,11 +256,11 @@ export function createTapArbiter({
     }, WRAPPER_SCROLL_SETTLE_MS);
   }
 
-  function shouldSuppressClick() {
+  function shouldSuppressClick(): boolean {
     return now() < suppressClicksUntil;
   }
 
-  function hasPendingTap() {
+  function hasPendingTap(): boolean {
     return pendingSingleTap != null;
   }
 
@@ -140,7 +268,7 @@ export function createTapArbiter({
   // at this position: any pending first tap belongs to that double-tap, and
   // the synthetic clicks WebKit may still deliver for it must not reach
   // arbitration.
-  function nativeActivationRequested() {
+  function nativeActivationRequested(): void {
     discardPendingTap();
     suppressClicksUntil = now() + DOUBLE_TAP_DELAY_MS;
   }
@@ -149,19 +277,18 @@ export function createTapArbiter({
   // a thunk so block resolution stays lazy: it only runs for taps that
   // actually qualify for arbitration, exactly as before extraction.
   //
-  // Returns:
-  //  - "forwarded": non-qualifying tap, already sent to native (in order,
-  //    after any flushed pending tap). Callers leave the click's default alone.
-  //  - "queued": a qualifying first tap now waiting out the double-tap window.
-  //  - "swallowed-pair": the second tap of a double-tap; the pair is consumed
-  //    and native owns the activation.
   // For both qualifying outcomes the caller should mark the click handled
   // (preventDefault) - plain touch/Pencil text clicks have no useful browser
   // default, and marking each candidate handled keeps WebKit from
   // interpreting a later paired tap as an unhandled smart-magnification
   // gesture. Links, controls, selections and mouse clicks never qualify.
-  function tap({ clickEvent, resolveBlock }) {
-    if (!isQualifyingTapCandidate(clickEvent)) {
+  function tap({ clickEvent, resolveBlock }: TapInput): TapOutcome {
+    // `lastCompletedTap == null` is never actually reachable when
+    // `isQualifyingTapCandidate` is true (its own check already requires
+    // `lastCompletedTap != null`) - included only so the compiler can narrow
+    // `lastCompletedTap` for the rest of this function without a non-null
+    // assertion.
+    if (!isQualifyingTapCandidate(clickEvent) || lastCompletedTap == null) {
       // Interactive content, a non-primary/secondary pointer, movement beyond
       // the tap threshold, or a mid-scroll tap. Flush any pending arbitration
       // first so native always receives taps in chronological order, then
@@ -172,13 +299,13 @@ export function createTapArbiter({
       return "forwarded";
     }
 
-    const candidate = {
-      clickEvent,
+    const completedTap = lastCompletedTap;
+    const candidate: TapIdentity = {
       block: resolveBlock(),
-      pointerType: lastCompletedTap.pointerType,
-      isPrimary: lastCompletedTap.isPrimary,
-      x: lastCompletedTap.x,
-      y: lastCompletedTap.y,
+      pointerType: completedTap.pointerType,
+      isPrimary: completedTap.isPrimary,
+      x: completedTap.x,
+      y: completedTap.y,
     };
 
     if (
@@ -199,7 +326,7 @@ export function createTapArbiter({
     // waiting out its own timer.
     flushPendingTap();
 
-    candidate.timer = setTimer(() => {
+    const timer = setTimer(() => {
       pendingSingleTap = null;
       // A selection can start forming (e.g. a long press) without ever
       // producing a qualifying second tap to pair with. Rather than
@@ -210,10 +337,14 @@ export function createTapArbiter({
       // fire. Non-collapsed means no pairing claimed this window, so the tap
       // is stale and dropped instead of firing mid-selection.
       if (isSelectionCollapsed()) {
-        sendTap(candidate.clickEvent);
+        sendTap(clickEvent);
       }
     }, DOUBLE_TAP_DELAY_MS);
-    pendingSingleTap = candidate;
+    // Built as one complete object (rather than mutating a `timer`-less
+    // candidate in place, as the pre-conversion source did) so a pending tap
+    // can never exist without its timer already attached - same behavior,
+    // honest to the type.
+    pendingSingleTap = { ...candidate, clickEvent, timer };
     return "queued";
   }
 
@@ -237,17 +368,25 @@ export function createTapArbiter({
   // posted). Returns "unclaimed" otherwise (wrong block, too far, wrong
   // pointer): the caller falls back to the original behavior - discard and
   // don't forward, so real selections still block activation.
-  function tapDuringSelection({ clickEvent, resolveBlock }) {
-    if (!pendingSingleTap || !isQualifyingTapCandidate(clickEvent)) {
+  function tapDuringSelection({
+    clickEvent,
+    resolveBlock,
+  }: TapInput): TapDuringSelectionOutcome {
+    if (
+      !pendingSingleTap ||
+      !isQualifyingTapCandidate(clickEvent) ||
+      lastCompletedTap == null
+    ) {
       return "unclaimed";
     }
 
-    const candidate = {
+    const completedTap = lastCompletedTap;
+    const candidate: TapIdentity = {
       block: resolveBlock(),
-      pointerType: lastCompletedTap.pointerType,
-      isPrimary: lastCompletedTap.isPrimary,
-      x: lastCompletedTap.x,
-      y: lastCompletedTap.y,
+      pointerType: completedTap.pointerType,
+      isPrimary: completedTap.isPrimary,
+      x: completedTap.x,
+      y: completedTap.y,
     };
 
     if (!isQualifyingSecondTap(pendingSingleTap, candidate)) {
@@ -262,7 +401,7 @@ export function createTapArbiter({
   // completing pointer barely moved, was the primary pointer, the target
   // isn't interactive content (decoration targets are already filtered out by
   // the caller), and the outer wrapper isn't mid-scroll.
-  function isQualifyingTapCandidate(clickEvent) {
+  function isQualifyingTapCandidate(clickEvent: TapArbiterClickEvent): boolean {
     return (
       !isWrapperScrolling &&
       clickEvent.interactiveElement == null &&
@@ -272,11 +411,14 @@ export function createTapArbiter({
     );
   }
 
-  function isBlockActivationPointerType(pointerType) {
+  function isBlockActivationPointerType(pointerType: string): boolean {
     return pointerType === "touch" || pointerType === "pen";
   }
 
-  function isQualifyingSecondTap(pending, tap) {
+  function isQualifyingSecondTap(
+    pending: TapIdentity,
+    tap: TapIdentity
+  ): boolean {
     return (
       pending.block != null &&
       tap.block != null &&
@@ -289,7 +431,7 @@ export function createTapArbiter({
     );
   }
 
-  function discardPendingTap() {
+  function discardPendingTap(): void {
     if (!pendingSingleTap) {
       return;
     }
@@ -297,7 +439,7 @@ export function createTapArbiter({
     pendingSingleTap = null;
   }
 
-  function flushPendingTap() {
+  function flushPendingTap(): void {
     if (!pendingSingleTap) {
       return;
     }
@@ -309,7 +451,7 @@ export function createTapArbiter({
 
   // Timers must not survive iframe unload; the adapter calls this from
   // `pagehide`/`unload`.
-  function dispose() {
+  function dispose(): void {
     discardPendingTap();
     clearTimer(wrapperScrollEndTimer);
     activePointer = null;
