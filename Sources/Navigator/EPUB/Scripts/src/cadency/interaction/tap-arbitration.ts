@@ -43,7 +43,7 @@ export interface TapArbiterClickEvent {
 
 // Returned by `tap()`:
 //  - "forwarded": non-qualifying tap, already sent to native (in order,
-//    after any flushed pending tap). Callers leave the click's default alone.
+//    after a flushed pending tap). Callers leave the click's default alone.
 //  - "queued": a qualifying first tap now waiting out the double-tap window.
 //  - "swallowed-pair": the second tap of a double-tap; the pair is consumed
 //    and native owns the activation.
@@ -214,7 +214,7 @@ export function createTapArbiter({
     if (Math.hypot(dx, dy) > TAP_MOVEMENT_THRESHOLD_PX) {
       activePointer.moved = true;
       // Movement beyond the tap threshold mid-gesture - likely the start of
-      // a pan/scroll rather than a second tap. Drop any pending arbitration
+      // a pan/scroll rather than a second tap. Drop pending arbitration
       // immediately rather than waiting for a (possibly debounced) outer
       // scroll event to catch up.
       discardPendingTap();
@@ -265,7 +265,7 @@ export function createTapArbiter({
   }
 
   // The native, public-API double-tap recognizer is about to activate a block
-  // at this position: any pending first tap belongs to that double-tap, and
+  // at this position: the pending first tap belongs to that double-tap, and
   // the synthetic clicks WebKit may still deliver for it must not reach
   // arbitration.
   function nativeActivationRequested(): void {
@@ -290,7 +290,7 @@ export function createTapArbiter({
     // assertion.
     if (!isQualifyingTapCandidate(clickEvent) || lastCompletedTap == null) {
       // Interactive content, a non-primary/secondary pointer, movement beyond
-      // the tap threshold, or a mid-scroll tap. Flush any pending arbitration
+      // the tap threshold, or a mid-scroll tap. Flush pending arbitration
       // first so native always receives taps in chronological order, then
       // forward this one immediately, exactly as before double-tap
       // arbitration existed.

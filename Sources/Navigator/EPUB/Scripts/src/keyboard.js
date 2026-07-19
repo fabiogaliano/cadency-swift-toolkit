@@ -5,7 +5,7 @@
 //
 
 import { findNearestInteractiveElement } from "./dom";
-import { addUserEventListener } from "./user-event";
+import { addUserEventListener } from "./cadency/interaction/user-event";
 
 addUserEventListener(window, "keydown", (event) => {
   if (shouldIgnoreEvent(event)) {

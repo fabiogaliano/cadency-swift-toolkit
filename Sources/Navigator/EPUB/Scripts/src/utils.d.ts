@@ -1,5 +1,5 @@
-// Narrow declaration seam for `utils.js` (Plan 006 Step 4) - declares only
-// the two exports `blocks.ts` calls, not the whole upstream-heavy file.
+// Narrow declaration seam for the two `utils.js` exports consumed by typed
+// Cadency interaction modules, not the whole upstream-heavy file.
 
 // Forwards `e.message` to the native `logError` bridge handler. Callers
 // always pass a caught exception, whose real shape is unknown to the

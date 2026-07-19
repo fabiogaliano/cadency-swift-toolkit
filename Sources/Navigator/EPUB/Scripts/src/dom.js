@@ -5,58 +5,8 @@
 //
 
 import { isScrollModeEnabled } from "./utils";
+import { findNearestInteractiveAncestor } from "./cadency/interaction/interactive-element";
 import { getCssSelector } from "css-selector-generator";
-
-// Single source of truth for what counts as "user interactive", shared by
-// `findNearestInteractiveElement` (below) and `blocks.js`'s block-activation
-// exclusion, so the two never drift into conflicting tag lists.
-var interactiveTags = [
-  "a",
-  "audio",
-  "button",
-  "canvas",
-  "details",
-  "summary",
-  "input",
-  "label",
-  "option",
-  "select",
-  "submit",
-  "textarea",
-  "video",
-];
-
-// Checks whether the element is editable by the user.
-function isEditableElement(element) {
-  return (
-    element.hasAttribute("contenteditable") &&
-    element.getAttribute("contenteditable").toLowerCase() != "false"
-  );
-}
-
-// Returns `element` or its nearest ancestor (inclusive) considered "user
-// interactive" - a link, control, editable region, or embedded media - or
-// null. Walks up because the touch might be for example on an <em> inside
-// an <a>.
-export function findNearestInteractiveAncestor(element) {
-  if (element == null) {
-    return null;
-  }
-
-  if (interactiveTags.indexOf(element.nodeName.toLowerCase()) !== -1) {
-    return element;
-  }
-
-  if (isEditableElement(element)) {
-    return element;
-  }
-
-  if (element.parentElement) {
-    return findNearestInteractiveAncestor(element.parentElement);
-  }
-
-  return null;
-}
 
 // Returns `element` or its first parent that is considered "user interactive".
 // For example a link, a video clip or a text field.

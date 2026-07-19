@@ -41,24 +41,27 @@ declarations because Vite+ publishes references to optional pack/devtools peers
 this package does not install. `vp run typecheck` runs both gates. TypeScript is
 pinned exactly at `7.0.2` (no `^`).
 
-Only Cadency-owned, behaviorally-tested leaf modules are converted, under
-`src/cadency/continuous/` and `src/cadency/interaction/`. Upstream/vendor
-JS is intentionally left untyped — narrow declaration seams
-(`src/dom.d.ts`, `src/utils.d.ts`, `src/selection.d.ts`,
-`src/types/webkit.d.ts`, `src/types/readium.d.ts`) declare only the
-handful of exports/globals a typed module actually calls, never a whole
-upstream file's surface. `src/index-continuous-wrapper.js` (1,400+ lines)
-stays plain JS: a disposable `// @ts-check` probe against it measured 103
-implicit-any/nullable-DOM errors, so `checkJs` stays `false` package-wide
-and this file isn't included in the tsconfig program.
+Cadency-owned state, policy, payload construction, and interaction helpers live
+as strict TypeScript under `src/cadency/continuous/` and
+`src/cadency/interaction/`. Upstream-compatible JavaScript files remain thin
+DOM, event-registration, and native-bridge adapters. Narrow declaration seams
+(`src/rect.d.ts`, `src/utils.d.ts`, `src/types/webkit.d.ts`, and
+`src/types/readium.d.ts`) cover only exports and globals used by real typed call
+sites; upstream and vendor JavaScript remains unchecked.
+
+`src/index-continuous-wrapper.js` and `src/gestures.js` intentionally remain
+JavaScript to preserve upstream mergeability and effect wiring. A disposable
+strict `// @ts-check` probe after the policy extraction measured 98 diagnostics
+in the continuous wrapper and 17 in gestures. The probe was reverted;
+`checkJs` remains `false` package-wide.
 
 Type-aware lint (`lint.options.typeAware`/`typeCheck` in `vite.config.ts`)
 stays disabled — it doesn't scope to `tsconfig.json`'s narrow `include`
 list and reaches the whole package instead (confirmed empirically).
 `tsc --noEmit` via `vp run typecheck` is the real, correctly-scoped gate.
 
-Baselines as of the last engine-wide gate run: 86 tests across 8 files
-(74 source + 12 bundle/config contract), 5 committed bundles with 5 generated
-source maps, `vp check` clean across 43 formatted / 38 linted files. Targeted
-live-WKWebView coverage executes the fixed, fixed-wrapper, reflowable selection,
-continuous decoration-shim, and block-activation paths from committed bundles.
+Current baseline: 120 tests across 15 files, 5 committed bundles with 5
+generated source maps, and clean formatting, lint, and strict typecheck gates.
+Targeted live-WKWebView coverage executes fixed, fixed-wrapper, reflowable
+selection, continuous navigation/decoration, hostile-EPUB, and block-activation
+paths from committed bundles.

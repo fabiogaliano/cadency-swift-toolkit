@@ -189,7 +189,7 @@ describe("qualification", () => {
     expect(performTap(h, { pointerType: "pen" }).outcome).toBe("queued");
   });
 
-  it("forwards taps on interactive content immediately, flushing any pending tap first", () => {
+  it("forwards taps on interactive content immediately, flushing the pending tap first", () => {
     const h = createHarness();
     const first = performTap(h);
     const second = performTap(h, { interactiveElement: "a" });

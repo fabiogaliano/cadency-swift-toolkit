@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     // JS stays importable from TS (untyped callers like
-    // index-continuous-wrapper.js), but is not itself type-checked yet -
-    // Plan 006 grows the checked surface one converted module at a time.
+    // index-continuous-wrapper.js), but is not itself type-checked. Cadency
+    // policy and state live in the strict TypeScript include below.
     "allowJs": true,
     "checkJs": false,
     "strict": true,

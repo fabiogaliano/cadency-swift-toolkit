@@ -43,7 +43,7 @@ interface PendingNavigation {
   /**
    * Navigate to a locator in a chapter: scroll immediately when loaded,
    * otherwise once the chapter's iframe load event fires. A new call
-   * replaces any pending target, settling its promise false.
+   * replaces the pending target, settling its promise false.
    * @returns Settles when the navigation's scroll ran (or definitively
    *   won't): true once the precise scroll happened, false when the target
    *   chapter failed for good or the navigation was superseded. The native

@@ -5,7 +5,8 @@
 //
 
 import { findDecorationTarget, handleDecorationClickEvent } from "./decorator";
-import { adjustPointToViewport, toTopViewportRect } from "./rect";
+import { adjustPointToViewport } from "./rect";
+import { toTopViewportRect } from "./cadency/interaction/viewport-geometry";
 import { findNearestInteractiveElement } from "./dom";
 import {
   resolveSemanticBlockAtPoint,
@@ -14,9 +15,9 @@ import {
 } from "./cadency/interaction/blocks";
 import { createTapArbiter } from "./cadency/interaction/tap-arbitration";
 import { shouldPostPointerEvent } from "./cadency/interaction/pointer-bridge";
+import { extractTargetElement } from "./cadency/interaction/target-element";
 import { logError } from "./utils";
-import { addUserEventListener } from "./user-event";
-import { getCssSelector } from "css-selector-generator";
+import { addUserEventListener } from "./cadency/interaction/user-event";
 
 let isSelecting = false;
 
@@ -157,6 +158,19 @@ export function activateBlockAtLocalPoint(iframeLocalX, iframeLocalY) {
 // Attempts to report a block activation to native. Returns "posted" only once
 // the `blockActivated` message has actually been posted, and false on any
 // failure (no Locator/payload, an unusable rect, or a postMessage error).
+function iframeFrameOffset() {
+  if (!frameElement) {
+    return undefined;
+  }
+
+  const frameClientRect = frameElement.getBoundingClientRect();
+  if (!frameClientRect) {
+    return undefined;
+  }
+
+  return { x: frameClientRect.x, y: frameClientRect.y };
+}
+
 function activateBlock(blockElement) {
   try {
     const payload = buildBlockActivationPayload(blockElement);
@@ -164,7 +178,10 @@ function activateBlock(blockElement) {
       return false;
     }
 
-    const topViewportRect = toTopViewportRect(payload.iframeLocalRect);
+    const topViewportRect = toTopViewportRect(
+      payload.iframeLocalRect,
+      iframeFrameOffset()
+    );
     if (!isFiniteNativeRect(topViewportRect)) {
       // Pre-check so a coordinate-conversion edge case never reaches Swift,
       // which strictly drops rects that aren't finite/positive anyway.
@@ -339,113 +356,4 @@ function observeOuterScrollForCancellation() {
 
 function onOuterScroll() {
   tapArbiter.outerScrolled();
-}
-
-/**
- * Extracts metadata about the target element for gesture handling.
- *
- * Returns an object with the element's bounding rectangle, tag name, source
- * URL, a CSS selector, the href of the document that contains the element,
- * an accessibility label, and a caption. This information is used on the
- * Swift side to build the appropriate `ContentElement`.
- */
-function extractTargetElement(element) {
-  if (!element || !element.getBoundingClientRect) {
-    return null;
-  }
-
-  let imageElement = findNearestImageElement(element);
-  if (!imageElement) {
-    return null;
-  }
-
-  let rect = imageElement.getBoundingClientRect();
-  // Adjust only the origin through the viewport transform; size is already
-  // in viewport-relative units and does not depend on the frame offset.
-  let adjustedOrigin = adjustPointToViewport({ x: rect.left, y: rect.top });
-
-  let rawSrc =
-    imageElement.getAttribute("src") ||
-    imageElement.getAttribute("href") ||
-    null;
-
-  // Resolve the raw src/href attribute to an absolute URL using the document's
-  // base URI. `getAttribute` returns the literal attribute value (possibly
-  // relative), while we need the absolute form so Swift can relativize it
-  // against the publication base URL to recover the correct manifest href.
-  let src = rawSrc ? new URL(rawSrc, document.baseURI).href : null;
-
-  // `html` is only needed for inline SVGs that have no resolvable `src`.
-  let html = src ? null : imageElement.outerHTML;
-
-  return {
-    tag: imageElement.tagName.toLowerCase(),
-    html: html,
-    src: src,
-    resourceHref: window.readium?.link?.href ?? null,
-    frame: {
-      x: adjustedOrigin.x,
-      y: adjustedOrigin.y,
-      width: rect.width,
-      height: rect.height,
-    },
-    accessibilityLabel: imageElement.getAttribute("aria-label")?.trim() || null,
-    caption: extractCaption(imageElement),
-    cssSelector: getCssSelector(imageElement),
-  };
-}
-
-/**
- * Returns a human-readable caption for an image element by checking, in
- * order: the `alt` attribute, the `title` attribute, the text content of the
- * first SVG `<title>` child, the text content of the first SVG `<desc>`
- * child, and the text content of a `<figcaption>` inside a parent `<figure>`.
- * Returns `null` when none of these are present.
- *
- * When `alt` is present — even as an empty string (decorative image) — no
- * other source is consulted, so that an explicit `alt=""` suppresses fallback
- * captions rather than incorrectly propagating them.
- */
-function extractCaption(imageElement) {
-  if (imageElement.hasAttribute("alt")) {
-    const alt = imageElement.getAttribute("alt").trim();
-    return alt || null;
-  }
-
-  const title = imageElement.getAttribute("title")?.trim();
-  if (title) return title;
-
-  const svgTitle = imageElement
-    .querySelector(":scope > title")
-    ?.textContent.trim();
-  if (svgTitle) return svgTitle;
-
-  const svgDesc = imageElement
-    .querySelector(":scope > desc")
-    ?.textContent.trim();
-  if (svgDesc) return svgDesc;
-
-  const figure = imageElement.closest("figure");
-  if (figure) {
-    const figcaption = figure.querySelector("figcaption")?.textContent.trim();
-    if (figcaption) return figcaption;
-  }
-
-  return null;
-}
-
-/**
- * Walks up the DOM tree from the given element to find the nearest image
- * element (img, svg).
- */
-function findNearestImageElement(element) {
-  const imageTags = ["img", "svg"];
-  let current = element;
-  while (current && current !== document.documentElement) {
-    if (imageTags.includes(current.tagName.toLowerCase())) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return null;
 }

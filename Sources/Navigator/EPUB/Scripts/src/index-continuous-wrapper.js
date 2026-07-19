@@ -10,11 +10,29 @@
 import { log } from "./utils";
 import { createPendingNavigation } from "./cadency/continuous/pending-navigation";
 import { createLandingCorrection } from "./cadency/continuous/landing-correction";
+import { ChapterRegistry } from "./cadency/continuous/chapter-registry";
+import { planChapterWindow } from "./cadency/continuous/chapter-window";
+import { DecorationRouting } from "./cadency/continuous/decoration-routing";
+import { progressionPayload } from "./cadency/continuous/progression";
+import {
+  cancelLandingCorrectionScroll,
+  classifyScroll,
+  createScrollSession,
+  extendAnchorSuppression,
+  extendLandingCorrectionScroll,
+  extendProgrammaticScroll,
+  hasLandingCorrectionScrollPending,
+  isAnchoringSuppressed as scrollSessionIsAnchoringSuppressed,
+  isProgrammaticScrollActive as scrollSessionIsProgrammaticScrollActive,
+} from "./cadency/continuous/scroll-session";
 import {
   findSpineIndexByHref,
   offsetInChapter,
 } from "./cadency/continuous/navigation-target";
-import { addUserEventListener, isUserEvent } from "./user-event";
+import {
+  addUserEventListener,
+  isUserEvent,
+} from "./cadency/interaction/user-event";
 import {
   chapterAtViewportTop,
   chapterProgression,
@@ -33,15 +51,7 @@ const ResizeObserver = window.ResizeObserver || ResizeObserverPolyfill;
 // Spine items configuration from Swift
 let spineItems = [];
 
-// Map of spine index -> chapter state
-// State can be: 'spacer', 'loading', 'loaded', 'error'
-const chapterStates = new Map();
-
-// Map of spine index -> measured content height
-const chapterHeights = new Map();
-
-// Map of spine index -> iframe element
-const loadedIframes = new Map();
+const chapterRegistry = new ChapterRegistry();
 
 // Configuration
 let config = {
@@ -61,38 +71,47 @@ let activeChapterIndex = 0;
 // Scroll anchoring state
 let anchorElement = null;
 let anchorOffset = 0;
-let suppressAnchoringUntil = 0;
-
-let programmaticScrollUntil = 0;
-let landingCorrectionScrollUntil = 0;
+let scrollSession = createScrollSession(0, 0);
 let isUserScrolling = false;
 let userScrollEndTimer = null;
-let lastScrollY = 0;
-let lastScrollTime = 0;
 let estimatedCenterIndex = 0;
-let lastEstimatedCenterIndexComputationTime = 0;
 const pendingIframeHeightUpdates = new Map();
 
 // Intersection observer for visibility tracking
 let visibilityObserver = null;
 
+function requireChapterTransition(result, operation) {
+  if (result.kind === "applied") return;
+  if (result.kind === "stale") {
+    throw new Error(`Chapter registry rejected ${operation}: stale transition`);
+  }
+  throw new Error(
+    `Chapter registry rejected ${operation}: ${result.transition} from ${result.currentState}`
+  );
+}
+
 function suppressAnchoringFor(durationMs) {
-  const until = Date.now() + durationMs;
-  suppressAnchoringUntil = Math.max(suppressAnchoringUntil, until);
+  scrollSession = extendAnchorSuppression(
+    scrollSession,
+    Date.now(),
+    durationMs
+  );
 }
 
 function isAnchoringSuppressed() {
-  return Date.now() < suppressAnchoringUntil;
+  return scrollSessionIsAnchoringSuppressed(scrollSession, Date.now());
 }
 
 function markProgrammaticScroll(durationMs = 250) {
-  const until = Date.now() + durationMs;
-  programmaticScrollUntil = Math.max(programmaticScrollUntil, until);
+  scrollSession = extendProgrammaticScroll(
+    scrollSession,
+    Date.now(),
+    durationMs
+  );
 }
 
 function isProgrammaticScrollActive() {
-  const now = Date.now();
-  return now < programmaticScrollUntil || now < landingCorrectionScrollUntil;
+  return scrollSessionIsProgrammaticScrollActive(scrollSession, Date.now());
 }
 
 function withProgrammaticScroll(fn, durationMs = 250) {
@@ -101,8 +120,11 @@ function withProgrammaticScroll(fn, durationMs = 250) {
 }
 
 function withLandingCorrectionScroll(fn, durationMs = 250) {
-  const until = Date.now() + durationMs;
-  landingCorrectionScrollUntil = Math.max(landingCorrectionScrollUntil, until);
+  scrollSession = extendLandingCorrectionScroll(
+    scrollSession,
+    Date.now(),
+    durationMs
+  );
   return fn();
 }
 
@@ -110,14 +132,14 @@ function computeCenterChapterIndexFromHeights() {
   const centerY = window.scrollY + window.innerHeight / 2;
   let cumulative = 0;
   for (let i = 0; i < spineItems.length; i++) {
-    cumulative += chapterHeights.get(i) || config.defaultChapterHeight;
+    cumulative += chapterRegistry.height(i) || config.defaultChapterHeight;
     if (cumulative > centerY) return i;
   }
   return Math.max(0, spineItems.length - 1);
 }
 
 function applyIframeHeightChange(spineIndex, iframe, newHeight) {
-  const previousHeight = chapterHeights.get(spineIndex) || 0;
+  const previousHeight = chapterRegistry.height(spineIndex) || 0;
   if (newHeight === previousHeight) return;
 
   if (isUserScrolling) {
@@ -131,7 +153,10 @@ function applyIframeHeightChange(spineIndex, iframe, newHeight) {
     saveScrollAnchor();
   }
 
-  chapterHeights.set(spineIndex, newHeight);
+  requireChapterTransition(
+    chapterRegistry.updateHeight(spineIndex, newHeight),
+    `height update for chapter ${spineIndex}`
+  );
   iframe.style.height = `${newHeight}px`;
 
   if (needsAnchor) {
@@ -143,7 +168,7 @@ function flushAfterUserScroll() {
   if (isUserScrolling) return;
 
   pendingIframeHeightUpdates.forEach((newHeight, spineIndex) => {
-    const iframe = loadedIframes.get(spineIndex);
+    const iframe = chapterRegistry.iframe(spineIndex);
     if (!iframe) return;
     applyIframeHeightChange(spineIndex, iframe, newHeight);
   });
@@ -176,8 +201,10 @@ function initialize(items, options = {}) {
   items.forEach((item, index) => {
     const chapter = createChapterElement(index);
     container.appendChild(chapter);
-    chapterStates.set(index, "spacer");
-    chapterHeights.set(index, config.defaultChapterHeight);
+    requireChapterTransition(
+      chapterRegistry.initialize(index, config.defaultChapterHeight),
+      `initialization of chapter ${index}`
+    );
   });
 
   setupVisibilityObserver();
@@ -218,8 +245,8 @@ function createChapterElement(spineIndex) {
  */
 function mountChapter(spineIndex) {
   if (
-    chapterStates.get(spineIndex) === "loaded" ||
-    chapterStates.get(spineIndex) === "loading"
+    chapterRegistry.state(spineIndex) === "loaded" ||
+    chapterRegistry.state(spineIndex) === "loading"
   ) {
     return;
   }
@@ -235,12 +262,19 @@ function mountChapter(spineIndex) {
     saveScrollAnchor();
   }
 
-  chapterStates.set(spineIndex, "loading");
-
+  if (chapterRegistry.state(spineIndex) === "error") {
+    requireChapterTransition(
+      chapterRegistry.unmount(
+        spineIndex,
+        chapterRegistry.height(spineIndex) || config.defaultChapterHeight
+      ),
+      `error reset for chapter ${spineIndex}`
+    );
+  }
   // Replace spacer with loading indicator
   wrapper.innerHTML = "";
   wrapper.style.minHeight = `${
-    chapterHeights.get(spineIndex) || config.defaultChapterHeight
+    chapterRegistry.height(spineIndex) || config.defaultChapterHeight
   }px`;
   const loading = document.createElement("div");
   loading.className = "chapter-loading";
@@ -255,7 +289,7 @@ function mountChapter(spineIndex) {
   // Hide iframe until loaded
   iframe.style.opacity = "0";
   iframe.style.height = `${
-    chapterHeights.get(spineIndex) || config.defaultChapterHeight
+    chapterRegistry.height(spineIndex) || config.defaultChapterHeight
   }px`;
 
   iframe.addEventListener("load", () => {
@@ -268,8 +302,10 @@ function mountChapter(spineIndex) {
 
   wrapper.appendChild(iframe);
   iframe.src = item.url;
-
-  loadedIframes.set(spineIndex, iframe);
+  requireChapterTransition(
+    chapterRegistry.beginLoading(spineIndex, iframe),
+    `mount of chapter ${spineIndex}`
+  );
 
   if (!isUserScrolling) {
     // Restore scroll anchor after DOM changes
@@ -284,7 +320,7 @@ function onIframeLoaded(spineIndex, iframe) {
   // A late load from an evicted iframe (unmounted, or replaced by a rapid
   // remount) must not resurrect the chapter's state, observe a dead document,
   // or resolve a pending navigation against stale geometry.
-  if (loadedIframes.get(spineIndex) !== iframe) return;
+  if (chapterRegistry.loaded(spineIndex, iframe).kind !== "applied") return;
   const wrapper = getChapterWrapper(spineIndex);
   if (!wrapper) return;
 
@@ -295,8 +331,6 @@ function onIframeLoaded(spineIndex, iframe) {
   }
 
   wrapper.style.minHeight = "";
-
-  chapterStates.set(spineIndex, "loaded");
 
   // Setup height observation
   setupIframeHeightObserver(spineIndex, iframe);
@@ -356,11 +390,9 @@ function reportFirstVisiblePaint(spineIndex) {
 function onIframeError(spineIndex, iframe) {
   // Same eviction guard as onIframeLoaded: a stale error must not flip a
   // freshly remounted chapter into the error state or burn a remount.
-  if (loadedIframes.get(spineIndex) !== iframe) return;
+  if (chapterRegistry.failed(spineIndex, iframe).kind !== "applied") return;
   const wrapper = getChapterWrapper(spineIndex);
   if (!wrapper) return;
-
-  chapterStates.set(spineIndex, "error");
 
   wrapper.style.minHeight = "";
 
@@ -381,7 +413,7 @@ function onIframeError(spineIndex, iframe) {
  * Unmount an iframe and replace with spacer.
  */
 function unmountChapter(spineIndex) {
-  const state = chapterStates.get(spineIndex);
+  const state = chapterRegistry.state(spineIndex);
   if (state === "spacer") return;
 
   const wrapper = getChapterWrapper(spineIndex);
@@ -392,10 +424,8 @@ function unmountChapter(spineIndex) {
 
   const height =
     wrapper.offsetHeight ||
-    chapterHeights.get(spineIndex) ||
+    chapterRegistry.height(spineIndex) ||
     config.defaultChapterHeight;
-  chapterHeights.set(spineIndex, height);
-
   // Replace with spacer
   wrapper.innerHTML = "";
   const spacer = document.createElement("div");
@@ -403,8 +433,10 @@ function unmountChapter(spineIndex) {
   spacer.style.height = `${height}px`;
   wrapper.appendChild(spacer);
 
-  chapterStates.set(spineIndex, "spacer");
-  loadedIframes.delete(spineIndex);
+  requireChapterTransition(
+    chapterRegistry.unmount(spineIndex, height),
+    `unmount of chapter ${spineIndex}`
+  );
   teardownIframeHeightObserver(spineIndex);
 
   if (!isUserScrolling) {
@@ -490,11 +522,15 @@ function applyStoredSettingsToIframe(spineIndex, iframe) {
   // Reapply each group's current snapshot subset for this chapter. A group whose
   // snapshot no longer covers this chapter resolves to an empty set and clears,
   // so decorations removed while the chapter was unmounted do not reappear.
-  groupDecorations.forEach((decorations, groupName) => {
+  decorationRouting.forEachGroup((_, groupName) => {
     applyDecorationsToIframe(
       iframe,
       groupName,
-      decorationsForSpineIndex(decorations, spineIndex)
+      decorationRouting.decorationsForSpineIndex(
+        spineItems,
+        groupName,
+        spineIndex
+      )
     );
   });
 }
@@ -579,7 +615,7 @@ function updateIframeHeight(spineIndex, iframe) {
     const doc = iframe.contentDocument;
     if (!doc || !doc.body) return;
 
-    const previousHeight = chapterHeights.get(spineIndex) || 0;
+    const previousHeight = chapterRegistry.height(spineIndex) || 0;
 
     // Get the scroll height of the body
     const bodyHeight = doc.body.scrollHeight;
@@ -605,7 +641,10 @@ function updateIframeHeight(spineIndex, iframe) {
         saveScrollAnchor();
       }
 
-      chapterHeights.set(spineIndex, newHeight);
+      requireChapterTransition(
+        chapterRegistry.updateHeight(spineIndex, newHeight),
+        `height update for chapter ${spineIndex}`
+      );
       iframe.style.height = `${newHeight}px`;
 
       // Restore anchor after height change
@@ -723,11 +762,10 @@ function setupVisibilityObserver() {
 /**
  * Setup scroll listener for progression updates.
  */
-function beginUserScroll(now = Date.now()) {
+function beginUserScroll() {
   if (!isUserScrolling) {
     estimatedCenterIndex = computeCenterChapterIndexFromHeights();
     activeChapterIndex = estimatedCenterIndex;
-    lastEstimatedCenterIndexComputationTime = now;
   }
 
   isUserScrolling = true;
@@ -741,13 +779,15 @@ function beginUserScroll(now = Date.now()) {
 function cancelLandingCorrectionFromUserInput(event) {
   if (event && !isUserEvent(event)) return false;
 
-  const hasLandingScrollPending = Date.now() < landingCorrectionScrollUntil;
+  const hasLandingScrollPending = hasLandingCorrectionScrollPending(
+    scrollSession,
+    Date.now()
+  );
   const cancelledActiveCorrection = landingCorrection.cancelFromUserInput();
   if (!cancelledActiveCorrection && !hasLandingScrollPending) {
     return false;
   }
-  landingCorrectionScrollUntil = 0;
-  programmaticScrollUntil = 0;
+  scrollSession = cancelLandingCorrectionScroll(scrollSession);
   return cancelledActiveCorrection;
 }
 
@@ -774,8 +814,7 @@ function setupIframeUserInputCancellation(iframe) {
 function setupScrollListener() {
   let ticking = false;
 
-  lastScrollY = window.scrollY;
-  lastScrollTime = Date.now();
+  scrollSession = createScrollSession(window.scrollY, Date.now());
   estimatedCenterIndex = activeChapterIndex;
 
   function maybeSuppressAnchoringFromClientX(clientX) {
@@ -841,29 +880,19 @@ function setupScrollListener() {
  */
 function onScroll() {
   const now = Date.now();
-  const currentY = window.scrollY;
-  const deltaY = Math.abs(currentY - lastScrollY);
-  const deltaTime = now - lastScrollTime;
+  const decision = classifyScroll(scrollSession, {
+    now,
+    scrollY: window.scrollY,
+    viewportHeight: window.innerHeight,
+    userScrolling: isUserScrolling,
+  });
+  scrollSession = decision.state;
 
-  lastScrollY = currentY;
-  lastScrollTime = now;
-
-  if (!isProgrammaticScrollActive()) {
-    const velocity = deltaTime > 0 ? deltaY / deltaTime : 0;
-    const isJumpLike =
-      deltaY > window.innerHeight ||
-      (velocity > 10 && deltaY > window.innerHeight * 0.25);
-
-    if (isJumpLike) {
-      beginUserScroll(now);
-
-      const isLargeJump = deltaY > window.innerHeight * 2;
-      if (isLargeJump && now - lastEstimatedCenterIndexComputationTime > 120) {
-        estimatedCenterIndex = computeCenterChapterIndexFromHeights();
-        activeChapterIndex = estimatedCenterIndex;
-        lastEstimatedCenterIndexComputationTime = now;
-      }
-    }
+  if (decision.kind === "begin-user-scroll") {
+    beginUserScroll();
+  } else if (decision.kind === "recompute-center") {
+    estimatedCenterIndex = computeCenterChapterIndexFromHeights();
+    activeChapterIndex = estimatedCenterIndex;
   }
 
   const centerIndex = isUserScrolling
@@ -885,79 +914,29 @@ function onActiveChapterChanged(spineIndex) {
  * Update which chapters are mounted based on the active chapter.
  */
 function updateMountedChapters(centerIndex) {
-  // pendingNavigation's eviction protection ends the moment the goTo scroll
-  // resolves — exactly when chapter heights start collapsing and reinflating.
-  // A transient collapse drags the viewport up, the IntersectionObserver
-  // recenters on an early chapter, and the just-landed target gets evicted,
-  // killing the landing correction mid-settle (the cold-restore-to-titlepage
-  // race). While a correction is active, keep the window centered on its
-  // target instead of the momentarily-visible chapter.
   const correctionTarget = landingCorrection.targetIndex();
-  if (correctionTarget != null) centerIndex = correctionTarget;
-
-  const start = Math.max(0, centerIndex - config.prefetchBehind);
-  const end = Math.min(
-    spineItems.length - 1,
-    centerIndex + config.prefetchAhead
-  );
-
-  // Mount chapters in the window
-  for (let i = start; i <= end; i++) {
-    mountChapter(i);
-  }
-
-  if (isUserScrolling) {
-    const maxMountedDuringFastScroll = Math.max(
-      config.maxMounted * 2,
-      config.maxMounted + 4
-    );
-    if (loadedIframes.size > maxMountedDuringFastScroll) {
-      const mounted = [];
-      loadedIframes.forEach((_, index) => {
-        // Never evict a chapter a goTo is waiting on, or it would never load.
-        if (
-          (index < start || index > end) &&
-          !pendingNavigation.isTarget(index)
-        ) {
-          mounted.push(index);
-        }
-      });
-
-      mounted.sort((a, b) => {
-        const distA = Math.abs(a - centerIndex);
-        const distB = Math.abs(b - centerIndex);
-        return distB - distA;
-      });
-
-      const toUnmount = mounted.slice(
-        0,
-        loadedIframes.size - maxMountedDuringFastScroll
-      );
-      toUnmount.forEach((index) => unmountChapter(index));
-    }
-    return;
-  }
-
-  // Unmount chapters outside the window (respecting maxMounted)
-  const mounted = [];
-  loadedIframes.forEach((_, index) => {
-    // Never evict a chapter a goTo is waiting on, or it would never load.
-    if ((index < start || index > end) && !pendingNavigation.isTarget(index)) {
-      mounted.push(index);
-    }
+  const windowPlan = planChapterWindow({
+    requestedCenterIndex: centerIndex,
+    landingCorrectionTarget:
+      correctionTarget === null ? undefined : correctionTarget,
+    spineItemCount: spineItems.length,
+    loadedChapterIndices: chapterRegistry.mountedIndices(),
+    pendingNavigationTarget: findPendingNavigationTarget(),
+    userScrolling: isUserScrolling,
+    configuration: config,
   });
 
-  // If too many mounted, unmount furthest ones
-  if (loadedIframes.size > config.maxMounted) {
-    mounted.sort((a, b) => {
-      const distA = Math.abs(a - centerIndex);
-      const distB = Math.abs(b - centerIndex);
-      return distB - distA; // Furthest first
-    });
+  windowPlan.indicesToMount.forEach((index) => mountChapter(index));
+  windowPlan.indicesToUnmount.forEach((index) => unmountChapter(index));
+}
 
-    const toUnmount = mounted.slice(0, loadedIframes.size - config.maxMounted);
-    toUnmount.forEach((index) => unmountChapter(index));
+function findPendingNavigationTarget() {
+  for (const index of chapterRegistry.mountedIndices()) {
+    if (pendingNavigation.isTarget(index)) {
+      return index;
+    }
   }
+  return undefined;
 }
 
 // ============================================================================
@@ -978,7 +957,7 @@ function checkInitialLoadComplete() {
   );
 
   for (let i = start; i <= end; i++) {
-    const state = chapterStates.get(i);
+    const state = chapterRegistry.state(i);
     if (state !== "loaded" && state !== "error") {
       return;
     }
@@ -993,7 +972,7 @@ function checkInitialLoadComplete() {
 // ============================================================================
 
 const pendingNavigation = createPendingNavigation({
-  getChapterState: (spineIndex) => chapterStates.get(spineIndex),
+  getChapterState: (spineIndex) => chapterRegistry.state(spineIndex),
   mountChapter: mountChapter,
   scrollToTarget: scrollToLocatorInChapter,
   scrollToChapterStart: (spineIndex) => {
@@ -1044,13 +1023,13 @@ function goTo(locator) {
  */
 function resolveScrollTarget(spineIndex, locator) {
   const wrapper = getChapterWrapper(spineIndex);
-  const iframe = loadedIframes.get(spineIndex);
+  const iframe = chapterRegistry.iframe(spineIndex);
   if (!wrapper || !iframe) return null;
 
   const wrapperTop = wrapper.getBoundingClientRect().top + window.scrollY;
   const chapterHeight =
     getIframeScrollHeight(iframe) ||
-    chapterHeights.get(spineIndex) ||
+    chapterRegistry.height(spineIndex) ||
     config.defaultChapterHeight;
   const offset = offsetInChapter(
     locator,
@@ -1165,7 +1144,7 @@ function scrollBackward() {
 
 function loadedChapterRects() {
   const chapters = [];
-  loadedIframes.forEach((iframe, spineIndex) => {
+  chapterRegistry.forEachMounted((iframe, spineIndex) => {
     const wrapper = getChapterWrapper(spineIndex);
     if (!wrapper) return;
     chapters.push({
@@ -1252,18 +1231,14 @@ function notifyProgressionChanged() {
   const viewportHeight = window.innerHeight;
   const scrollY = window.scrollY;
 
-  const maxY = Math.max(1, totalHeight - viewportHeight);
-  const firstProgression = Math.max(0, Math.min(1, scrollY / maxY));
-  const lastProgression = Math.max(
-    0,
-    Math.min(1, (scrollY + viewportHeight) / totalHeight)
+  webkit.messageHandlers.progressionChanged.postMessage(
+    progressionPayload({
+      totalHeight,
+      viewportHeight,
+      scrollY,
+      activeChapterIndex,
+    })
   );
-
-  webkit.messageHandlers.progressionChanged.postMessage({
-    first: firstProgression,
-    last: lastProgression,
-    activeChapter: activeChapterIndex,
-  });
 }
 
 /**
@@ -1280,25 +1255,7 @@ function notifyChapterMounted(spineIndex) {
 // Decorations
 // ============================================================================
 
-// Latest complete decoration snapshot per group. Each applyDecorations call
-// replaces a group's entry wholesale: a group is always the full set of
-// decorations across every chapter, never a delta. Retained so chapters that
-// mount (or remount) later reapply exactly this set and previously-removed
-// decorations never reappear.
-const groupDecorations = new Map();
-
-// Decoration groups which should forward activation events.
-const activableDecorationGroups = new Set();
-
-// Decorations from `decorations` whose locator resolves to `spineIndex`, using
-// the same fuzzy href matching the rest of the wrapper relies on.
-function decorationsForSpineIndex(decorations, spineIndex) {
-  return decorations.filter(
-    (decoration) =>
-      findSpineIndexByHref(spineItems, decoration.locator?.href || "") ===
-      spineIndex
-  );
-}
+const decorationRouting = new DecorationRouting();
 
 /**
  * Apply a group's complete decoration snapshot.
@@ -1311,17 +1268,21 @@ function decorationsForSpineIndex(decorations, spineIndex) {
  * @param {Array} decorations - Complete decoration snapshot for the group
  */
 function applyDecorations(groupName, decorations) {
-  groupDecorations.set(groupName, decorations);
+  decorationRouting.replaceGroup(groupName, decorations);
 
-  loadedIframes.forEach((iframe, spineIndex) => {
-    const state = chapterStates.get(spineIndex);
+  chapterRegistry.forEachMounted((iframe, spineIndex) => {
+    const state = chapterRegistry.state(spineIndex);
     if (state !== "loaded") {
       return;
     }
     applyDecorationsToIframe(
       iframe,
       groupName,
-      decorationsForSpineIndex(decorations, spineIndex)
+      decorationRouting.decorationsForSpineIndex(
+        spineItems,
+        groupName,
+        spineIndex
+      )
     );
   });
 }
@@ -1335,7 +1296,7 @@ function applyDecorationsToIframe(iframe, groupName, decorations) {
     if (!readium) return;
     const group = readium.getDecorations(groupName);
     group.clear();
-    if (activableDecorationGroups.has(groupName)) {
+    if (decorationRouting.isGroupActivable(groupName)) {
       group.setActivable();
     }
     decorations.forEach((d) => group.add(d));
@@ -1349,7 +1310,7 @@ function applyDecorationsToIframe(iframe, groupName, decorations) {
  */
 function registerDecorationTemplates(templates) {
   // Apply templates to all loaded iframes
-  loadedIframes.forEach((iframe) => {
+  chapterRegistry.forEachMounted((iframe) => {
     try {
       const readium = getIframeReadium(iframe);
       if (readium) {
@@ -1372,7 +1333,7 @@ function registerDecorationTemplates(templates) {
  * Set CSS properties on all loaded iframes.
  */
 function setCSSProperties(properties) {
-  loadedIframes.forEach((iframe) => {
+  chapterRegistry.forEachMounted((iframe) => {
     try {
       const readium = getIframeReadium(iframe);
       if (readium) {
@@ -1417,11 +1378,7 @@ function insertSeparator(spineIndex, html) {
 }
 
 function setDecorationGroupActivable(groupName, isActivable) {
-  if (isActivable) {
-    activableDecorationGroups.add(groupName);
-  } else {
-    activableDecorationGroups.delete(groupName);
-  }
+  decorationRouting.setGroupActivable(groupName, isActivable);
 }
 
 // ============================================================================
@@ -1435,7 +1392,7 @@ function setDecorationGroupActivable(groupName, isActivable) {
  */
 function clearSelection() {
   window.getSelection()?.removeAllRanges();
-  loadedIframes.forEach((iframe) => {
+  chapterRegistry.forEachMounted((iframe) => {
     try {
       iframe.contentWindow?.getSelection()?.removeAllRanges();
     } catch (e) {
@@ -1473,6 +1430,6 @@ global.continuousWrapper = {
 
   // Debug/info
   getActiveChapterIndex: () => activeChapterIndex,
-  getChapterStates: () => Object.fromEntries(chapterStates),
-  getChapterHeights: () => Object.fromEntries(chapterHeights),
+  getChapterStates: () => Object.fromEntries(chapterRegistry.stateEntries()),
+  getChapterHeights: () => Object.fromEntries(chapterRegistry.heightEntries()),
 };

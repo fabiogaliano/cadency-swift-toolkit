@@ -9,12 +9,11 @@
 // future gesture handler would send natively - it does not listen for
 // gestures or touch the WK message bridge itself.
 //
-// Imports from `dom.js`/`utils.js`/`selection.js` are typed only at this
-// narrow seam (see the sibling `src/dom.d.ts`, `src/utils.d.ts`,
-// `src/selection.d.ts`) - those upstream-heavy files stay untyped JS, out of
-// this plan's scope.
+// The upstream-heavy `utils.js` file stays behind the narrow `src/utils.d.ts`
+// seam. Cadency-owned interaction policy is imported directly from strict
+// TypeScript modules in this directory.
 
-import { findNearestInteractiveAncestor } from "../../dom";
+import { findNearestInteractiveAncestor } from "./interactive-element";
 import { logError, logErrorMessage } from "../../utils";
 import {
   cssSelectorForElement,
@@ -22,7 +21,7 @@ import {
   normalizeHighlightText,
   rangeForElement,
   rangeLocalRect,
-} from "../../selection";
+} from "./selection-range";
 
 // Elements treated as a complete, independently-activatable reading block.
 const PRIMARY_BLOCK_TAGS = new Set([
@@ -169,7 +168,7 @@ export function buildBlockLocator(
       return null;
     }
 
-    const exact = blockElement.textContent;
+    const exact = textContentForElement(blockElement);
     if (normalizeHighlightText(exact).length === 0) {
       return null;
     }
@@ -292,8 +291,8 @@ function isElementNode(node: Node): node is Element {
 // Node.ELEMENT_NODE` on every iteration; dropped here as a provably dead
 // check, not a behavior change - `node` starts as the `Element` parameter
 // and is only ever reassigned from `.parentElement`, which the DOM spec (and
-// the DOM lib's own type) guarantees is always `Element | null`, never any
-// other node kind. The loop can never see a non-Element truthy `node`.
+// the DOM lib's own type) guarantees is always `Element | null`, never a
+// different node kind. The loop can never see a non-Element truthy `node`.
 function findNearestPrimaryBlock(element: Element): Element | null {
   let node: Element | null = element;
   while (node) {
@@ -308,10 +307,18 @@ function findNearestPrimaryBlock(element: Element): Element | null {
   return null;
 }
 
+function textContentForElement(element: Element): string {
+  const text = element.textContent;
+  if (text === null) {
+    throw new Error("Element did not expose text content");
+  }
+  return text;
+}
+
 function isEligibleBlock(element: Element): boolean {
   return (
     !isHiddenOrInert(element) &&
-    normalizeHighlightText(element.textContent).length > 0
+    normalizeHighlightText(textContentForElement(element)).length > 0
   );
 }
 
@@ -350,7 +357,7 @@ function isConservativeLeafBlockCandidate(element: Element): boolean {
   if (!style || !FALLBACK_BLOCK_DISPLAY.has(style.display)) {
     return false;
   }
-  if (normalizeHighlightText(element.textContent).length === 0) {
+  if (normalizeHighlightText(textContentForElement(element)).length === 0) {
     return false;
   }
   // A container wrapping several meaningful block-like children is a
@@ -369,7 +376,9 @@ function hasMultipleMeaningfulBlockDescendants(element: Element): boolean {
     if (!style || !FALLBACK_BLOCK_DISPLAY.has(style.display)) {
       continue;
     }
-    if (normalizeHighlightText(descendant.textContent).length === 0) {
+    if (
+      normalizeHighlightText(textContentForElement(descendant)).length === 0
+    ) {
       continue;
     }
     meaningfulCount++;
@@ -426,7 +435,7 @@ function buildBlockKey(
 // chapter mount) - deliberately not re-resolved against the iframe's own
 // document URL via `new URL()`, since that risks doubling path segments
 // when the href and the iframe's base URL share a directory prefix. Just
-// strip whitespace and any incidental query/hash.
+// strip whitespace and an incidental query/hash.
 function normalizeHref(href: string): string {
   return href.trim().split(/[?#]/)[0];
 }
