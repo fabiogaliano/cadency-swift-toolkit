@@ -38,12 +38,14 @@ class EPUBContinuousNavigatorBlockActivationTests: XCTestCase {
     private func validBody(
         locator: Any? = nil,
         rect: Any? = ["x": 12.0, "y": 34.0, "width": 320.0, "height": 48.0],
-        blockKey: Any? = "chapter1.xhtml##chapter > p:nth-child(3)::abc123"
+        blockKey: Any? = "chapter1.xhtml##chapter > p:nth-child(3)::abc123",
+        trigger: Any? = "double-tap"
     ) -> [String: Any] {
         var body: [String: Any] = [:]
         body["locator"] = locator ?? validLocator()
         if let rect { body["rect"] = rect }
         if let blockKey { body["blockKey"] = blockKey }
+        if let trigger { body["trigger"] = trigger }
         return body
     }
 
@@ -88,6 +90,12 @@ class EPUBContinuousNavigatorBlockActivationTests: XCTestCase {
         XCTAssertEqual(event.locator.text.highlight, "The exact block text.")
         XCTAssertEqual(event.rect, CGRect(x: 12, y: 34, width: 320, height: 48))
         XCTAssertEqual(event.blockKey, "chapter1.xhtml##chapter > p:nth-child(3)::abc123")
+        XCTAssertEqual(event.trigger, .doubleTap)
+    }
+
+    func testAcceptsSingleTapTrigger() throws {
+        let event = try parse(validBody(trigger: "single-tap")).get()
+        XCTAssertEqual(event.trigger, .singleTap)
     }
 
     func testAcceptsMissingBlockKeyAsNil() throws {
@@ -191,6 +199,12 @@ class EPUBContinuousNavigatorBlockActivationTests: XCTestCase {
     func testRejectsEmptyOrNonStringBlockKey() {
         assertRejected(validBody(blockKey: ""), warningContains: "blockKey")
         assertRejected(validBody(blockKey: 42), warningContains: "blockKey")
+    }
+
+    func testRejectsMissingOrUnknownTrigger() {
+        assertRejected(validBody(trigger: nil), warningContains: "trigger")
+        assertRejected(validBody(trigger: "long-press"), warningContains: "trigger")
+        assertRejected(validBody(trigger: 42), warningContains: "trigger")
     }
 
     // MARK: - Frame origin check

@@ -68,6 +68,9 @@ function buildClickEvent(event) {
     y: point.y,
     targetElement: event.target.outerHTML,
     interactiveElement: findNearestInteractiveElement(event.target),
+    semanticBlock: readium.isFixedLayout
+      ? null
+      : resolveSemanticBlockForTarget(event.target),
   };
 }
 
@@ -99,7 +102,7 @@ function onClick(event) {
       }
       const outcome = tapArbiter.tapDuringSelection({
         clickEvent,
-        resolveBlock: () => resolveSemanticBlockForTarget(event.target),
+        resolveBlock: () => clickEvent.semanticBlock,
       });
       if (outcome === "paired") {
         // Mark the synthesized click handled through the public DOM event
@@ -126,7 +129,7 @@ function onClick(event) {
 
   const outcome = tapArbiter.tap({
     clickEvent,
-    resolveBlock: () => resolveSemanticBlockForTarget(event.target),
+    resolveBlock: () => clickEvent.semanticBlock,
   });
   if (outcome !== "forwarded") {
     event.preventDefault();
@@ -138,10 +141,21 @@ function onClick(event) {
 }
 
 function sendTap(clickEvent) {
-  // Send the tap data over the JS bridge even if it's been handled
-  // within the webview, so that it can be preserved and used
-  // by the WKNavigationDelegate if needed.
-  webkit.messageHandlers.tap.postMessage(clickEvent);
+  // A settled single text tap opens the phrase drawer. Interactive content and
+  // targets without a safe semantic block retain Readium's normal tap path.
+  if (
+    !clickEvent.interactiveElement &&
+    activateBlock(clickEvent.semanticBlock, "single-tap") === "posted"
+  ) {
+    return;
+  }
+  webkit.messageHandlers.tap.postMessage({
+    defaultPrevented: clickEvent.defaultPrevented,
+    x: clickEvent.x,
+    y: clickEvent.y,
+    targetElement: clickEvent.targetElement,
+    interactiveElement: clickEvent.interactiveElement,
+  });
 }
 
 // Entry point for the native, public-API double-tap recognizer, called via the
@@ -150,8 +164,10 @@ function sendTap(clickEvent) {
 export function activateBlockAtLocalPoint(iframeLocalX, iframeLocalY) {
   tapArbiter.nativeActivationRequested();
   return (
-    activateBlock(resolveSemanticBlockAtPoint(iframeLocalX, iframeLocalY)) ||
-    "none"
+    activateBlock(
+      resolveSemanticBlockAtPoint(iframeLocalX, iframeLocalY),
+      "double-tap"
+    ) || "none"
   );
 }
 
@@ -171,7 +187,7 @@ function iframeFrameOffset() {
   return { x: frameClientRect.x, y: frameClientRect.y };
 }
 
-function activateBlock(blockElement) {
+function activateBlock(blockElement, trigger) {
   try {
     const payload = buildBlockActivationPayload(blockElement);
     if (!payload) {
@@ -192,6 +208,7 @@ function activateBlock(blockElement) {
       locator: payload.locator,
       rect: topViewportRect,
       blockKey: payload.blockKey,
+      trigger,
     });
     // Clear the accidental WebKit word selection only now that activation has
     // actually been reported - a failed activation leaves any selection intact.

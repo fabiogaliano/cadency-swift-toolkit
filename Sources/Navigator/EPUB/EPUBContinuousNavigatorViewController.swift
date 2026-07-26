@@ -194,6 +194,11 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
     /// A validated double-tap block activation, carried from chapter iframe JavaScript through
     /// this navigator to the delegate. Positional identity only — never a durable block ID.
     public struct BlockActivationEvent: Equatable {
+        public enum Trigger: String, Equatable {
+            case singleTap = "single-tap"
+            case doubleTap = "double-tap"
+        }
+
         /// Locator for the activated block, anchored by `locations.cssSelector` with
         /// `text.highlight`/`before`/`after` set for `TextQuoteAnchor` resolution.
         public var locator: Locator
@@ -205,10 +210,14 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
         /// at least the chapter href and CSS selector. Not a persisted identifier.
         public var blockKey: String?
 
-        public init(locator: Locator, rect: CGRect, blockKey: String?) {
+        /// Gesture that caused the activation.
+        public var trigger: Trigger
+
+        public init(locator: Locator, rect: CGRect, blockKey: String?, trigger: Trigger) {
             self.locator = locator
             self.rect = rect
             self.blockKey = blockKey
+            self.trigger = trigger
         }
     }
 
@@ -1045,6 +1054,13 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             return .failure(.init(warning: "blockActivated: rect is missing, non-finite, or non-positive"))
         }
 
+        guard
+            let rawTrigger = data["trigger"] as? String,
+            let trigger = BlockActivationEvent.Trigger(rawValue: rawTrigger)
+        else {
+            return .failure(.init(warning: "blockActivated: trigger must be single-tap or double-tap"))
+        }
+
         // `WKScriptMessage.body` bridges JS `null` to `NSNull`, so an explicit `blockKey: null`
         // arrives as `.some(NSNull())` rather than `.none`; treat it the same as an absent key.
         let blockKey: String?
@@ -1071,7 +1087,14 @@ open class EPUBContinuousNavigatorViewController: InputObservableViewController,
             }
         }
 
-        return .success(BlockActivationEvent(locator: locator, rect: rect, blockKey: blockKey))
+        return .success(
+            BlockActivationEvent(
+                locator: locator,
+                rect: rect,
+                blockKey: blockKey,
+                trigger: trigger
+            )
+        )
     }
 
     /// Strictly parses the `rect` field of a `blockActivated` message.
