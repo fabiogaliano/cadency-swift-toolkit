@@ -1,9 +1,10 @@
 name: Documentation
 
+# Doc deploys also burn macos-15 minutes; keep them manual-only for now.
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+  # release:
+  #   types: [published]
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:

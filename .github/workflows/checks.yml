@@ -1,9 +1,13 @@
 name: Checks
 
+# Automatic CI is off: every job here runs on macos-15, which GitHub bills at
+# 10x the Linux rate. Re-enable the push/pull_request triggers when it's worth
+# paying for again. Until then the workflow is manual-only.
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
+  workflow_dispatch:
+  # push:
+  #   branches: [ main, develop ]
+  # pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
