@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit && tsc --project tsconfig.tooling.json"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "typescript": "7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
     "vite-plus": "0.2.5"
